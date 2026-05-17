@@ -39,19 +39,22 @@ from src.utils.video_io import open_video, video_meta, make_writer, iter_frames
 from src.utils.visualization import draw_boxes, put_fps_text
 
 # ── 运行时配置 ────────────────────────────────────────────────────────────────
-_MODEL      = MODEL_DIR / MODEL_NAME          # 推理模型路径
-_MAX_FRAMES = 1000                            # None = 处理全部帧
-_OUTPUT_VID = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
+_MODEL       = MODEL_DIR / MODEL_NAME          # 推理模型路径
+_START_FRAME = 2250                               # 起始帧号（含），0 = 视频开头
+_END_FRAME   = 3250                            # 终止帧号（不含），None = 视频结尾
+_OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
 
 # 车牌正则：省份简称 + 字母 + 5位字母/数字（标准蓝牌 / 新能源绿牌格式）
 # 第1位：中文省份简称
 # 第2位：A-Z（发牌城市代码）
 # 第3-7位：A-Z 或 0-9（流水号，新能源末位可为字母，共5位）
 _PROVINCE = "京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤川青藏琼宁"
-_PLATE_PATTERN = re.compile(
-    rf"[{_PROVINCE}][A-Z][A-Z0-9]{{5}}"
-)
-_OCR_CONF_THRESH = 0.6   # OCR 置信度阈值，低于此值的文字行丢弃
+# 完整车牌：省份简称 + 城市码(A-Z) + 5位流水号
+_PLATE_FULL = re.compile(rf"[{_PROVINCE}][A-Z][A-Z0-9]{{5}}")
+# 降级正则：省份字符被 OCR 误读时，从末尾取城市码 + 5位流水号（共6字符）
+# 不加边界限制，直接取字符串最后6位，避免 'MA8R5Z9' 中 'A' 被前置 'M' 阻断
+_PLATE_BODY = re.compile(r"[A-Z][A-Z0-9]{5}$")
+_OCR_CONF_THRESH = 0.2   # OCR 置信度阈值，低于此值的文字行丢弃
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,32 +206,57 @@ class PlateRecognizer:
         """
         try:
             if self._engine == "rapid":
-                result, _ = self._ocr(crop)          # RapidOCR 返回 (结果列表, 耗时)
+                result, _ = self._ocr(crop)
                 if not result:
                     return ""
                 for item in result:
-                    # item 格式: [box_points, (text, score)]
-                    text, score = item[1][0], item[1][1]
+                    # RapidOCR 格式: [box_points, text_str, score_str]
+                    text  = item[1]
+                    score = float(item[2])
                     if score < _OCR_CONF_THRESH:
                         continue
-                    text = text.replace(" ", "").upper()
-                    if _PLATE_PATTERN.search(text):
-                        return _PLATE_PATTERN.search(text).group()
+                    plate = self._match_plate(text)
+                    if plate:
+                        return plate
 
             elif self._engine == "paddle":
                 result = self._ocr.ocr(crop, cls=True)
                 if not result or not result[0]:
                     return ""
                 for line in result[0]:
-                    text, score = line[1][0], line[1][1]
+                    # PaddleOCR 格式: [box_points, (text_str, score_float)]
+                    text  = line[1][0]
+                    score = float(line[1][1])
                     if score < _OCR_CONF_THRESH:
                         continue
-                    text = text.replace(" ", "").upper()
-                    if _PLATE_PATTERN.search(text):
-                        return _PLATE_PATTERN.search(text).group()
+                    plate = self._match_plate(text)
+                    if plate:
+                        return plate
 
         except Exception:  # noqa: BLE001
             pass
+        return ""
+
+    @staticmethod
+    def _match_plate(text: str) -> str:
+        """从 OCR 文字中提取车牌号。
+
+        优先匹配完整格式（省份+城市码+5位），
+        降级匹配城市码+5位（省份被误读时）。
+
+        Args:
+            text: OCR 识别的原始文字。
+
+        Returns:
+            提取的车牌字符串，无匹配返回空字符串。
+        """
+        clean = text.replace(" ", "").upper()
+        m = _PLATE_FULL.search(clean)
+        if m:
+            return m.group()
+        m = _PLATE_BODY.search(clean)
+        if m:
+            return m.group()   # 缺省份字符的车牌，仍有意义
         return ""
 
 
@@ -277,7 +305,8 @@ class TrajectoryTracker:
         video_path: str | Path = VIDEO_PATH,
         output_video: str | Path = _OUTPUT_VID,
         csv_path: str | Path = TRAJ_CSV_PATH,
-        max_frames: Optional[int] = _MAX_FRAMES,
+        start_frame: int = _START_FRAME,
+        end_frame: Optional[int] = _END_FRAME,
         sample_fps: int = TRAJ_SAMPLE_FPS,
     ) -> Path:
         """运行跟踪并输出轨迹 CSV 和标注视频。
@@ -286,7 +315,8 @@ class TrajectoryTracker:
             video_path:   输入视频路径。
             output_video: 输出带标注视频路径。
             csv_path:     输出轨迹 CSV 路径。
-            max_frames:   最大处理帧数，None 表示全量。
+            start_frame:  起始帧号（含），默认 0。
+            end_frame:    终止帧号（不含），None 表示处理到视频结尾。
             sample_fps:   每秒采样次数（轨迹记录频率）。
 
         Returns:
@@ -295,16 +325,24 @@ class TrajectoryTracker:
         cap  = open_video(video_path)
         meta = video_meta(cap)
 
-        # 计算采样间隔（帧数）
         video_fps       = meta["fps"] if meta["fps"] > 0 else 25.0
-        sample_interval = max(1, round(video_fps / sample_fps))
+        sample_interval = max(1, round(video_fps / sample_fps))   # 采样间隔（帧数）
 
-        total  = meta["frame_count"] if max_frames is None else min(meta["frame_count"], max_frames)
+        # 计算实际处理范围
+        total_video = meta["frame_count"]
+        start_frame = max(0, min(start_frame, total_video - 1))
+        end_frame   = total_video if end_frame is None else min(end_frame, total_video)
+        n_frames    = max(0, end_frame - start_frame)
+
+        # Seek 到起始帧
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
         writer = make_writer(output_video, meta["fps"], meta["width"], meta["height"])
 
-        print(f"[Tracker] 视频: {meta['width']}x{meta['height']}  "
-              f"{video_fps:.1f}fps  共{total}帧  "
-              f"轨迹采样间隔: {sample_interval}帧")
+        print(f"[Tracker] 视频: {meta['width']}x{meta['height']}  {video_fps:.1f}fps  "
+              f"处理帧: {start_frame} ~ {end_frame}（共{n_frames}帧）  "
+              f"采样间隔: {sample_interval}帧")
 
         csv_path = Path(csv_path)
         csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -317,7 +355,8 @@ class TrajectoryTracker:
             writer_csv = csv.DictWriter(f, fieldnames=self._CSV_FIELDS)
             writer_csv.writeheader()
 
-            for frame_idx, frame in iter_frames(cap, max_frames):
+            for local_idx, frame in iter_frames(cap, n_frames):
+                frame_idx = start_frame + local_idx   # 视频中的绝对帧号
                 t0 = time.perf_counter()
 
                 # ByteTrack 跟踪推理（persist=True 保持跨帧状态）
@@ -333,7 +372,7 @@ class TrajectoryTracker:
                 cur_fps = 1.0 / (time.perf_counter() - t0)
                 fps_list.append(cur_fps)
 
-                timestamp_s = round(frame_idx / video_fps, 3)
+                timestamp_s   = round(frame_idx / video_fps, 3)
                 should_sample = (frame_idx % sample_interval == 0)
 
                 boxes_xyxy, labels, confs, track_ids = [], [], [], []
@@ -385,10 +424,10 @@ class TrajectoryTracker:
                 put_fps_text(frame, cur_fps, len(boxes_xyxy))
                 writer.write(frame)
 
-                if (frame_idx + 1) % 30 == 0:
+                if (local_idx + 1) % 30 == 0:
                     avg30 = sum(fps_list[-30:]) / min(len(fps_list), 30)
-                    pct   = (frame_idx + 1) / total * 100
-                    print(f"[{pct:5.1f}%] 帧 {frame_idx+1:4d}/{total}  "
+                    pct   = (local_idx + 1) / n_frames * 100
+                    print(f"[{pct:5.1f}%] 帧 {frame_idx:4d}/{end_frame-1}  "
                           f"近30帧均FPS: {avg30:.1f}  "
                           f"已记录轨迹行: {rows_written}", flush=True)
 
@@ -407,4 +446,4 @@ class TrajectoryTracker:
 
 if __name__ == "__main__":
     tracker = TrajectoryTracker()
-    tracker.run()
+    tracker.run(start_frame=_START_FRAME, end_frame=_END_FRAME)

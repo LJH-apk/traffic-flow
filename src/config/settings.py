@@ -11,7 +11,7 @@ OUTPUT_DIR  = _ROOT / "outputs"                             # 所有生成文件
 MODEL_DIR   = _ROOT                                         # .pt 权重所在目录（暂留根目录）
 
 # ── 模型 ──────────────────────────────────────────────────────────────────────
-MODEL_NAME      = "yolo26l.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
+MODEL_NAME      = "yolo26m.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
 MODEL_NAME_GT   = "yolo26x.pt"  # 伪GT生成器（eval 用）
 DEVICE          = "mps"          # 推理设备：mps / cpu / cuda
 
@@ -41,7 +41,7 @@ IOU_THRESH      = 0.45   # NMS IoU 阈值
 # ── 评测超参 ──────────────────────────────────────────────────────────────────
 CONF_GT         = 0.25   # 伪GT置信度阈值
 CONF_PRED       = 0.25   # 待评测模型置信度阈值
-SAMPLE_EVERY    = 25     # eval_on_video 每隔N帧采样一帧
+SAMPLE_EVERY    = 10     # eval_on_video 每隔N帧采样一帧
 MAX_SAMPLES     = 200    # eval_on_video 最大采样帧数
 
 # ── 轨迹采样 ─────────────────────────────────────────────────────────────────
