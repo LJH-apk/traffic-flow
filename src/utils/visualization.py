@@ -17,7 +17,7 @@ def _has_cjk(text: str) -> bool:
     return any('\u4e00' <= ch <= '\u9fff' for ch in text)
 
 
-def _put_text(frame, text, pos, color, font_scale=0.55, thickness=2):
+def put_text(frame, text, pos, color, font_scale=0.55, thickness=2):
     """含中文走 Pillow，否则走 cv2.putText。pos 为左上角坐标。"""
     if _PIL_AVAILABLE and _has_cjk(text):
         img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -60,7 +60,7 @@ def draw_boxes(
         plate = plates[i]    if plates    is not None else ""
         base  = f"#{tid} {label} {conf:.2f}" if tid is not None else f"{label} {conf:.2f}"
         text  = f"{base} | {plate}" if plate else base
-        _put_text(frame, text, (x1, y1 - 22), color)
+        put_text(frame, text, (x1, y1 - 22), color)
     return frame
 
 

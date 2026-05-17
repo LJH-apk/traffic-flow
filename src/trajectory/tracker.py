@@ -36,7 +36,7 @@ from src.config.settings import (
     TRAJ_CSV_PATH,
 )
 from src.utils.video_io import open_video, video_meta, make_writer, iter_frames
-from src.utils.visualization import draw_boxes, put_fps_text
+from src.utils.visualization import draw_boxes, put_fps_text, put_text
 
 # ── 运行时配置 ────────────────────────────────────────────────────────────────
 _MODEL       = MODEL_DIR / MODEL_NAME          # 推理模型路径
@@ -54,188 +54,106 @@ _PLATE_FULL = re.compile(rf"[{_PROVINCE}][A-Z][A-Z0-9]{{5}}")
 # 降级正则：省份字符被 OCR 误读时，从末尾取城市码 + 5位流水号（共6字符）
 # 不加边界限制，直接取字符串最后6位，避免 'MA8R5Z9' 中 'A' 被前置 'M' 阻断
 _PLATE_BODY = re.compile(r"[A-Z][A-Z0-9]{5}$")
-_OCR_CONF_THRESH = 0.2   # OCR 置信度阈值，低于此值的文字行丢弃
+_PLATE_CONF_THRESH = 0.6  # HyperLPR3 置信度阈值，低于此值的结果丢弃
+
+
+def _rel_to_abs(
+    rel_box: tuple[float, float, float, float],
+    x1: int, y1: int, x2: int, y2: int,
+) -> tuple[int, int, int, int]:
+    """将相对坐标（在车辆 bbox 内的比例）转换为当前帧的绝对像素坐标。"""
+    rx1, ry1, rx2, ry2 = rel_box
+    vw, vh = x2 - x1, y2 - y1
+    return (x1 + int(rx1 * vw), y1 + int(ry1 * vh),
+            x1 + int(rx2 * vw), y1 + int(ry2 * vh))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 class PlateRecognizer:
-    """车牌识别器：首次识别成功后缓存结果，避免对同一车辆重复 OCR。
+    """车牌识别器：使用 HyperLPR3 检测并识别车牌，首次成功后缓存结果。
 
-    OCR 引擎优先级：RapidOCR（ONNX）→ PaddleOCR → 禁用。
-    RapidOCR 在 macOS M1 使用 CPU ONNX Runtime；迁移到 NVIDIA 时只需将
-    ``onnxruntime`` 替换为 ``onnxruntime-gpu``，业务代码零改动。
+    缓存值为 (plate_str, box_xyxy)，其中 box_xyxy 是车牌在完整帧中的坐标，
+    供上层绘制真实车牌框使用。
 
     Attributes:
-        _cache:   track_id -> plate_str 的识别缓存，每辆车仅 OCR 一次。
-        _engine:  当前使用的引擎名称（"rapid" / "paddle" / None）。
-        _enabled: False 表示无可用 OCR 引擎，recognize() 直接返回空字符串。
+        _cache:   track_id -> (plate_str, rel_box) 的识别缓存，每辆车仅推理一次。
+                  rel_box 为车牌在车辆 bbox 内的相对坐标 (rx1,ry1,rx2,ry2)，
+                  每帧用当前 bbox 还原绝对坐标，从而跟随车辆移动。
+        _enabled: False 表示 hyperlpr3 不可用，recognize() 直接返回空结果。
     """
 
     def __init__(self) -> None:
-        """按优先级初始化 OCR 引擎，均不可用时降级为空实现。"""
-        self._cache:   dict[int, str] = {}
-        self._ocr      = None
-        self._engine:  str | None = None
-        self._enabled: bool = False
+        self._cache:   dict[int, tuple[str, tuple[float, float, float, float] | None]] = {}
+        self._catcher = None
+        self._enabled = False
 
-        # 优先尝试 RapidOCR（轻量，跨平台 ONNX）
         try:
-            from rapidocr_onnxruntime import RapidOCR  # type: ignore
-            self._ocr     = RapidOCR()
-            self._engine  = "rapid"
+            import hyperlpr3 as lpr3  # type: ignore
+            self._catcher = lpr3.LicensePlateCatcher()
             self._enabled = True
-            print("[PlateRecognizer] RapidOCR 加载成功")
-            return
+            print("[PlateRecognizer] HyperLPR3 加载成功")
         except ImportError:
-            pass
-
-        # 其次尝试 PaddleOCR（NVIDIA 生产环境备选）
-        try:
-            from paddleocr import PaddleOCR  # type: ignore
-            self._ocr     = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
-            self._engine  = "paddle"
-            self._enabled = True
-            print("[PlateRecognizer] PaddleOCR 加载成功")
-            return
-        except ImportError:
-            pass
-
-        print("[PlateRecognizer] 未找到 OCR 引擎，车牌识别已禁用")
+            print("[PlateRecognizer] 未找到 hyperlpr3，车牌识别已禁用")
 
     def recognize(
         self,
         frame: np.ndarray,
         track_id: int,
         box_xyxy: tuple[int, int, int, int],
-    ) -> str:
+    ) -> tuple[str, tuple[float, float, float, float] | None]:
         """识别车牌，已成功识别的 track_id 直接返回缓存。
 
         Args:
             frame:    完整 BGR 帧。
             track_id: 跟踪 ID。
-            box_xyxy: 车辆检测框 (x1, y1, x2, y2)。
+            box_xyxy: 车辆检测框 (x1, y1, x2, y2)，传入整个车辆区域供检测。
 
         Returns:
-            车牌字符串；未识别返回空字符串。
+            (plate_str, rel_box)；rel_box 为车牌在车辆 bbox 内的相对坐标
+            (rx1, ry1, rx2, ry2)，未识别时返回 ("", None)。
         """
         if track_id in self._cache:
             return self._cache[track_id]
         if not self._enabled:
-            return ""
+            return "", None
 
-        crop = self._crop_plate_region(frame, box_xyxy)
-        if crop is None:
-            return ""
-
-        crop = self._preprocess(crop)
-        plate = self._run_ocr(crop)
-        if plate:
-            self._cache[track_id] = plate
-        return plate
-
-    # ── 内部方法 ──────────────────────────────────────────────────────────────
-
-    def _crop_plate_region(
-        self,
-        frame: np.ndarray,
-        box_xyxy: tuple[int, int, int, int],
-    ) -> np.ndarray | None:
-        """从车辆框中裁剪车牌候选区域。
-
-        取框高底部 30%、宽度中间 80% 的矩形，并向下延伸 5% 补偿框偏紧情况。
-
-        Args:
-            frame:    完整 BGR 帧。
-            box_xyxy: 车辆检测框 (x1, y1, x2, y2)。
-
-        Returns:
-            裁剪后的 BGR 图像；框过小时返回 None。
-        """
         fh, fw = frame.shape[:2]
         x1, y1, x2, y2 = box_xyxy
-        h, w = y2 - y1, x2 - x1
+        cx1, cy1 = max(0, x1), max(0, y1)
+        cx2, cy2 = min(fw, x2), min(fh, y2)
+        crop_w, crop_h = cx2 - cx1, cy2 - cy1
+        if crop_w <= 0 or crop_h <= 0:
+            return "", None
+        crop = frame[cy1:cy2, cx1:cx2]
 
-        if h < 20 or w < 20:   # 车辆框过小，无法识别车牌
-            return None
-
-        # 底部 30% + 向下延伸 5%
-        crop_y1 = max(0,  y2 - int(h * 0.30))
-        crop_y2 = min(fh, y2 + int(h * 0.05))
-
-        # 宽度收窄到中间 80%（去掉左右边缘遮挡）
-        margin   = int(w * 0.10)
-        crop_x1  = max(0,  x1 + margin)
-        crop_x2  = min(fw, x2 - margin)
-
-        crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
-        return crop if crop.size > 0 else None
-
-    @staticmethod
-    def _preprocess(crop: np.ndarray) -> np.ndarray:
-        """对裁剪区域做图像增强，提升 OCR 准确率。
-
-        流程：上采样（≥48px 高）→ 灰度化 → CLAHE 对比度增强 → 转回 BGR。
-
-        Args:
-            crop: BGR 裁剪图像。
-
-        Returns:
-            增强后的 BGR 图像。
-        """
-        # 上采样：OCR 对高度 < 48px 的图像准确率明显下降
-        h, w = crop.shape[:2]
-        if h < 48:
-            scale = 48 / h
-            crop  = cv2.resize(crop, (int(w * scale), 48),
-                               interpolation=cv2.INTER_LINEAR)
-
-        # CLAHE 对比度均衡化
-        gray  = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
-        gray  = clahe.apply(gray)
-        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-    def _run_ocr(self, crop: np.ndarray) -> str:
-        """对预处理后的图像运行 OCR，返回匹配车牌格式的字符串。
-
-        Args:
-            crop: 预处理后的 BGR 图像。
-
-        Returns:
-            匹配车牌正则且置信度达标的字符串，否则返回空字符串。
-        """
         try:
-            if self._engine == "rapid":
-                result, _ = self._ocr(crop)
-                if not result:
-                    return ""
-                for item in result:
-                    # RapidOCR 格式: [box_points, text_str, score_str]
-                    text  = item[1]
-                    score = float(item[2])
-                    if score < _OCR_CONF_THRESH:
-                        continue
-                    plate = self._match_plate(text)
-                    if plate:
-                        return plate
-
-            elif self._engine == "paddle":
-                result = self._ocr.ocr(crop, cls=True)
-                if not result or not result[0]:
-                    return ""
-                for line in result[0]:
-                    # PaddleOCR 格式: [box_points, (text_str, score_float)]
-                    text  = line[1][0]
-                    score = float(line[1][1])
-                    if score < _OCR_CONF_THRESH:
-                        continue
-                    plate = self._match_plate(text)
-                    if plate:
-                        return plate
-
+            results = self._catcher(crop)
         except Exception:  # noqa: BLE001
-            pass
-        return ""
+            return "", None
+
+        best_plate: str = ""
+        best_box:   tuple[float, float, float, float] | None = None
+        best_conf:  float = _PLATE_CONF_THRESH
+
+        for item in (results or []):
+            text, conf = item[0], float(item[1])
+            if conf < best_conf:
+                continue
+            plate = self._match_plate(text)
+            if not plate:
+                continue
+            # item[3] 是车牌在 crop 内的绝对像素坐标，转为相对比例存储，
+            # 使得后续每帧可根据当前 bbox 还原绝对坐标，车牌框跟随车辆移动。
+            px1, py1, px2, py2 = item[3]
+            rel_box = (px1 / crop_w, py1 / crop_h, px2 / crop_w, py2 / crop_h)
+            best_plate = plate
+            best_box   = rel_box
+            best_conf  = conf
+
+        result: tuple[str, tuple[float, float, float, float] | None] = (best_plate, best_box)
+        if best_plate:
+            self._cache[track_id] = result
+        return result
 
     @staticmethod
     def _match_plate(text: str) -> str:
@@ -375,7 +293,7 @@ class TrajectoryTracker:
                 timestamp_s   = round(frame_idx / video_fps, 3)
                 should_sample = (frame_idx % sample_interval == 0)
 
-                boxes_xyxy, labels, confs, track_ids, plates = [], [], [], [], []
+                boxes_xyxy, labels, confs, track_ids, plates, plate_boxes = [], [], [], [], [], []
 
                 boxes_data = results.boxes
                 if boxes_data is not None and len(boxes_data):
@@ -397,17 +315,28 @@ class TrajectoryTracker:
                         confs.append(conf)
                         track_ids.append(tid)
 
-                        # 每帧：从缓存取已确认车牌（不跑 OCR）
-                        plate_display = self._plate_rec._cache.get(tid, "") if tid is not None else ""
+                        # 每帧：从缓存取已确认车牌，用当前 bbox 还原绝对坐标
+                        cached = (
+                            self._plate_rec._cache.get(tid, ("", None))
+                            if tid is not None else ("", None)
+                        )
+                        plate_display, cached_rel_box = cached
+                        plate_box_display = (
+                            _rel_to_abs(cached_rel_box, x1, y1, x2, y2)
+                            if cached_rel_box is not None else None
+                        )
 
                         # 轨迹采样记录
                         if should_sample and tid is not None:
                             cx = (x1 + x2) // 2
                             cy = (y1 + y2) // 2
-                            plate = self._plate_rec.recognize(
+                            plate_display, rel_box = self._plate_rec.recognize(
                                 frame, tid, (x1, y1, x2, y2)
                             )
-                            plate_display = plate
+                            plate_box_display = (
+                                _rel_to_abs(rel_box, x1, y1, x2, y2)
+                                if rel_box is not None else None
+                            )
                             writer_csv.writerow({
                                 "frame_id":   frame_idx,
                                 "timestamp_s": timestamp_s,
@@ -419,23 +348,20 @@ class TrajectoryTracker:
                                 "y1":         y1,
                                 "x2":         x2,
                                 "y2":         y2,
-                                "plate":      plate,
+                                "plate":      plate_display,
                             })
                             rows_written += 1
 
                         plates.append(plate_display)
+                        plate_boxes.append(plate_box_display)
 
-                # 画黄色车牌候选框（仅已识别车牌的车辆）
-                fh, fw = frame.shape[:2]
-                for (x1, y1, x2, y2), plate_display in zip(boxes_xyxy, plates):
-                    if not plate_display:
+                # 画真实车牌框和识别标签（含中文省份字符，走 PIL 渲染）
+                for plate_str, plate_box in zip(plates, plate_boxes):
+                    if not plate_str or plate_box is None:
                         continue
-                    h, w = y2 - y1, x2 - x1
-                    px1 = max(0,  x1 + int(w * 0.10))
-                    px2 = min(fw, x2 - int(w * 0.10))
-                    py1 = max(0,  y2 - int(h * 0.30))
-                    py2 = min(fh, y2 + int(h * 0.05))
+                    px1, py1, px2, py2 = plate_box
                     cv2.rectangle(frame, (px1, py1), (px2, py2), (0, 255, 255), 2)
+                    put_text(frame, plate_str, (px1, max(0, py1 - 22)), (0, 255, 255))
 
                 # 绘制带跟踪ID和车牌的标注框
                 draw_boxes(frame, boxes_xyxy, labels, confs, track_ids, plates)
