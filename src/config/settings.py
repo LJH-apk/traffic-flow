@@ -17,7 +17,6 @@ DEVICE          = "mps"          # 推理设备：mps / cpu / cuda
 
 # ── 类别 ──────────────────────────────────────────────────────────────────────
 VEHICLE_CLASSES: dict[int, str] = {
-    0: "person",
     1: "bicycle",
     2: "car",
     3: "motorcycle",
@@ -31,7 +30,6 @@ CLASS_COLORS: dict[str, tuple[int, int, int]] = {
     "bus":        (255, 128,   0),
     "motorcycle": (255,   0, 255),
     "bicycle":    (0,   255, 255),
-    "person":     (255, 255,   0),
 }
 
 # ── 检测超参 ──────────────────────────────────────────────────────────────────

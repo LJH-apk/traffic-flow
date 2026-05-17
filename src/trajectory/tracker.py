@@ -375,7 +375,7 @@ class TrajectoryTracker:
                 timestamp_s   = round(frame_idx / video_fps, 3)
                 should_sample = (frame_idx % sample_interval == 0)
 
-                boxes_xyxy, labels, confs, track_ids = [], [], [], []
+                boxes_xyxy, labels, confs, track_ids, plates = [], [], [], [], []
 
                 boxes_data = results.boxes
                 if boxes_data is not None and len(boxes_data):
@@ -397,6 +397,9 @@ class TrajectoryTracker:
                         confs.append(conf)
                         track_ids.append(tid)
 
+                        # 每帧：从缓存取已确认车牌（不跑 OCR）
+                        plate_display = self._plate_rec._cache.get(tid, "") if tid is not None else ""
+
                         # 轨迹采样记录
                         if should_sample and tid is not None:
                             cx = (x1 + x2) // 2
@@ -404,6 +407,7 @@ class TrajectoryTracker:
                             plate = self._plate_rec.recognize(
                                 frame, tid, (x1, y1, x2, y2)
                             )
+                            plate_display = plate
                             writer_csv.writerow({
                                 "frame_id":   frame_idx,
                                 "timestamp_s": timestamp_s,
@@ -419,8 +423,22 @@ class TrajectoryTracker:
                             })
                             rows_written += 1
 
-                # 绘制带跟踪ID的标注框
-                draw_boxes(frame, boxes_xyxy, labels, confs, track_ids)
+                        plates.append(plate_display)
+
+                # 画黄色车牌候选框（仅已识别车牌的车辆）
+                fh, fw = frame.shape[:2]
+                for (x1, y1, x2, y2), plate_display in zip(boxes_xyxy, plates):
+                    if not plate_display:
+                        continue
+                    h, w = y2 - y1, x2 - x1
+                    px1 = max(0,  x1 + int(w * 0.10))
+                    px2 = min(fw, x2 - int(w * 0.10))
+                    py1 = max(0,  y2 - int(h * 0.30))
+                    py2 = min(fh, y2 + int(h * 0.05))
+                    cv2.rectangle(frame, (px1, py1), (px2, py2), (0, 255, 255), 2)
+
+                # 绘制带跟踪ID和车牌的标注框
+                draw_boxes(frame, boxes_xyxy, labels, confs, track_ids, plates)
                 put_fps_text(frame, cur_fps, len(boxes_xyxy))
                 writer.write(frame)
 
