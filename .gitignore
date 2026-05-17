@@ -1,0 +1,26 @@
+# 模型权重（大文件）
+*.pt
+
+# 视频文件
+*.mp4
+*.avi
+
+# 生成输出（运行时产物）
+outputs/
+runs/
+
+# 根目录遗留的评测图表 / JSON
+*.png
+*.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+
+# 数据目录（含视频符号链接）
+data/
