@@ -34,7 +34,14 @@ from src.config.settings import (
     MODEL_NAME,
     TRAJ_SAMPLE_FPS,
     TRAJ_CSV_PATH,
+    SECTION_LINES,
+    HOMOGRAPHY_MATRIX,
+    PIXELS_PER_METER,
+    CROSS_SECTION_CSV_PATH,
 )
+from src.cross_section.zebra_detector import ZebraDetector
+from src.cross_section.counter import CrossSectionDetector
+from src.cross_section.lane_detector import LaneDetector
 from src.utils.video_io import open_video, video_meta, make_writer, iter_frames
 from src.utils.visualization import draw_boxes, put_fps_text, put_text
 
@@ -196,6 +203,7 @@ class TrajectoryTracker:
         "frame_id", "timestamp_s", "track_id", "class_name",
         "cx", "cy", "x1", "y1", "x2", "y2", "plate",
     ]
+    _CROSS_CSV_FIELDS = CrossSectionDetector.CSV_FIELDS
 
     def __init__(
         self,
@@ -268,6 +276,39 @@ class TrajectoryTracker:
         class_ids    = list(VEHICLE_CLASSES.keys())
         fps_list: list[float] = []
         rows_written = 0
+
+        # ── 断面检测 + 车道线检测初始化（Position A）──────────────────────────
+        # 优先用 settings 中预设的 H；否则尝试从第一帧自动检测斑马线
+        _H = HOMOGRAPHY_MATRIX
+        _zebra_rects: list[tuple[int, int, int, int]] = []  # 条纹矩形（可视化用）
+        _lane_lines: list = []                               # 车道线段（可视化用）
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        _ret_ref, _ref_frame = cap.read()
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)  # rewind
+
+        if _ret_ref:
+            # 斑马线检测
+            if _H is None:
+                _zresult = ZebraDetector().detect(_ref_frame)
+                if _zresult is not None:
+                    _H, _n, _zebra_rects = _zresult
+                    print(f"[断面] 自动检测斑马线成功，{_n}条纹，H已计算")
+                else:
+                    print("[断面] 斑马线自动检测失败，使用 PIXELS_PER_METER 兜底")
+            # 车道线检测（一次性，零运行时开销）
+            _lane_lines = LaneDetector().detect(_ref_frame)
+            print(f"[车道] 检测到 {len(_lane_lines)} 条车道线段")
+
+        section_det = CrossSectionDetector(SECTION_LINES, _H, PIXELS_PER_METER, video_fps)
+        _section_hit: dict[str, int] = {}
+        _HIGHLIGHT_FRAMES = 8
+
+        cross_path = Path(CROSS_SECTION_CSV_PATH)
+        cross_path.parent.mkdir(parents=True, exist_ok=True)
+        cross_f = cross_path.open("w", newline="", encoding="utf-8")
+        cross_writer = csv.DictWriter(cross_f, fieldnames=self._CROSS_CSV_FIELDS)
+        cross_writer.writeheader()
 
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             writer_csv = csv.DictWriter(f, fieldnames=self._CSV_FIELDS)
@@ -355,6 +396,32 @@ class TrajectoryTracker:
                         plates.append(plate_display)
                         plate_boxes.append(plate_box_display)
 
+                # ── 断面过车检测（Position B）──────────────────────────────────
+                for _box, _label, _tid in zip(boxes_xyxy, labels, track_ids):
+                    if _tid is None:
+                        continue
+                    _bx1, _by1, _bx2, _by2 = _box
+                    for ev in section_det.update(
+                        frame_idx, timestamp_s, _tid, _label,
+                        frame, _bx1, _by1, _bx2, _by2,
+                    ):
+                        cross_writer.writerow(ev)
+                        _section_hit[ev["section"]] = frame_idx
+
+                # ── 绘制车道线 + 斑马线框（Position C，最底层）────────────────
+                LaneDetector.draw(frame, _lane_lines)
+                for _zx, _zy, _zw, _zh in _zebra_rects:
+                    cv2.rectangle(frame, (_zx, _zy), (_zx + _zw, _zy + _zh),
+                                  (0, 255, 200), 2)
+
+                # ── 绘制断面线（在车辆框下层）────────────────────────────────
+                for _name, _lx1, _ly1, _lx2, _ly2, _, _ in SECTION_LINES:
+                    _age = frame_idx - _section_hit.get(_name, -999)
+                    _col = (0, 255, 255) if _age <= _HIGHLIGHT_FRAMES else (0, 0, 255)
+                    _thi = 4              if _age <= _HIGHLIGHT_FRAMES else 2
+                    cv2.line(frame, (_lx1, _ly1), (_lx2, _ly2), _col, _thi)
+                    put_text(frame, _name, (_lx1, _ly1 - 24), _col)
+
                 # 画真实车牌框和识别标签（含中文省份字符，走 PIL 渲染）
                 for plate_str, plate_box in zip(plates, plate_boxes):
                     if not plate_str or plate_box is None:
@@ -377,6 +444,7 @@ class TrajectoryTracker:
 
         cap.release()
         writer.release()
+        cross_f.close()
 
         avg_fps = sum(fps_list) / len(fps_list) if fps_list else 0.0
         print(f"\n=== 轨迹提取完成 ===")
@@ -384,6 +452,7 @@ class TrajectoryTracker:
         print(f"平均推理FPS : {avg_fps:.1f}")
         print(f"轨迹记录行  : {rows_written}")
         print(f"CSV 输出    : {csv_path}")
+        print(f"断面CSV     : {cross_path}")
         print(f"视频输出    : {output_video}")
         return csv_path
 
