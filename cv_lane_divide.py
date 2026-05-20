@@ -44,6 +44,7 @@ POLY_DEG = 2
 
 # ── 曲率过滤：二次项系数 a 允许偏离中位数的最大值 ────────────────────────────
 CURVATURE_TOL = 1e-3    # 单位：px^-1，实测 a ~ 1e-3，容差约 ±30%
+POLY_SEARCH_R = 25   # 多项式引导搜索横向半径（px）
 
 # ── 车道颜色表（BGR）────────────────────────────────────────────────────────
 LANE_COLORS = [
@@ -211,6 +212,61 @@ def filter_by_curvature(polys: list[np.poly1d],
     return kept_polys, kept_lines
 
 
+# ── 多项式引导远端窄带扫描 ───────────────────────────────────────────────────
+def refine_with_poly_guide(
+    mask: np.ndarray,
+    polys: list[np.poly1d],
+    lines: list[np.ndarray],
+    h: int,
+    w: int,
+) -> tuple[list[np.poly1d], list[np.ndarray]]:
+    """
+    沿每条已有多项式曲线，在远端 ROI 做窄带像素验证，
+    把找到的点追加到点集后重新拟合。
+    """
+    roi_y1 = int(h * ROI_Y_START)
+    roi_y2 = int(h * ROI_Y_END)
+    roi_x1 = int(w * ROI_X_START)
+    roi_x2 = int(w * ROI_X_END)
+    far_thresh_y = roi_y1 + (roi_y2 - roi_y1) * ROI_FAR_SPLIT
+
+    new_polys = []
+    new_lines = []
+
+    for poly, pts in zip(polys, lines):
+        extra_pts = list(pts)  # 复制原有点集
+
+        # 只在远端（y < far_thresh_y）做引导搜索
+        for abs_y in range(roi_y1, int(far_thresh_y), ROW_STEP):
+            pred_x = poly(abs_y)
+            x_lo = int(max(roi_x1, pred_x - POLY_SEARCH_R))
+            x_hi = int(min(roi_x2, pred_x + POLY_SEARCH_R))
+            if x_lo >= x_hi:
+                continue
+
+            row_slice = mask[abs_y, x_lo:x_hi]
+            white_xs  = np.where(row_slice > 0)[0] + x_lo
+            if len(white_xs) > 0:
+                cx = int(np.mean(white_xs))
+                extra_pts.append([float(abs_y), float(cx)])
+
+        if len(extra_pts) < MIN_ROW_COUNT_FAR:
+            new_polys.append(poly)
+            new_lines.append(pts)
+            continue
+
+        arr = np.array(extra_pts, dtype=np.float32)
+        try:
+            coeffs = np.polyfit(arr[:, 0], arr[:, 1], POLY_DEG)
+            new_polys.append(np.poly1d(coeffs))
+            new_lines.append(arr)
+        except Exception:
+            new_polys.append(poly)
+            new_lines.append(pts)
+
+    return new_polys, new_lines
+
+
 # ── 可视化 ───────────────────────────────────────────────────────────────────
 def draw_lanes(frame: np.ndarray,
                polys: list[np.poly1d],
@@ -299,6 +355,10 @@ def main():
 
     polys, lines = filter_by_curvature(polys, lines)
     print(f"保留曲线: {len(polys)} 条  →  划分车道: {len(polys)-1} 个")
+
+    print("多项式引导远端扫描...")
+    polys, lines = refine_with_poly_guide(mask, polys, lines, h, w)
+    print(f"精修后曲线: {len(polys)} 条")
 
     vis = draw_lanes(frame, polys, lines)
 
