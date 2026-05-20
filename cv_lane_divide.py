@@ -47,6 +47,7 @@ CURVATURE_TOL = 1e-3    # 单位：px^-1，实测 a ~ 1e-3，容差约 ±30%
 POLY_SEARCH_R = 25   # 多项式引导搜索横向半径（px）
 BLIND_SEARCH_R    = 60   # 盲搜横向半径（px）
 BLIND_MIN_ROWS    = 12   # 盲搜需要找到的最少行数
+BLIND_BOUNDARY_EXCL = 30   # 盲搜边界排除距离：忽略贴近已知线的白色像素（px）
 
 # ── 车道颜色表（BGR）────────────────────────────────────────────────────────
 LANE_COLORS = [
@@ -310,7 +311,7 @@ def blind_search_missing(
             if len(white_xs) > 0:
                 cx = int(np.mean(white_xs))
                 # 排除贴近已知线的点（避免把边界线误认为中间线）
-                if abs(cx - p_left(abs_y)) > 30 and abs(cx - p_right(abs_y)) > 30:
+                if abs(cx - p_left(abs_y)) > BLIND_BOUNDARY_EXCL and abs(cx - p_right(abs_y)) > BLIND_BOUNDARY_EXCL:
                     mid_pts.append([float(abs_y), float(cx)])
 
         if len(mid_pts) < BLIND_MIN_ROWS:
@@ -427,7 +428,7 @@ def main():
     print("盲搜补全漏检线...")
     polys, lines = blind_search_missing(mask, polys, lines, h, w)
     # 补全后再过一次曲率过滤，剔除噪声
-    polys, lines = filter_by_curvature(polys, lines)
+    polys, lines = filter_by_curvature(polys, lines, tol=CURVATURE_TOL * 1.5)
     print(f"最终曲线: {len(polys)} 条  →  划分车道: {len(polys)-1} 个")
 
     vis = draw_lanes(frame, polys, lines)
