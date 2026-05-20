@@ -45,6 +45,8 @@ POLY_DEG = 2
 # ── 曲率过滤：二次项系数 a 允许偏离中位数的最大值 ────────────────────────────
 CURVATURE_TOL = 1e-3    # 单位：px^-1，实测 a ~ 1e-3，容差约 ±30%
 POLY_SEARCH_R = 25   # 多项式引导搜索横向半径（px）
+BLIND_SEARCH_R    = 60   # 盲搜横向半径（px）
+BLIND_MIN_ROWS    = 12   # 盲搜需要找到的最少行数
 
 # ── 车道颜色表（BGR）────────────────────────────────────────────────────────
 LANE_COLORS = [
@@ -267,6 +269,68 @@ def refine_with_poly_guide(
     return new_polys, new_lines
 
 
+# ── 盲搜补全漏检虚线 ─────────────────────────────────────────────────────────
+def blind_search_missing(
+    mask: np.ndarray,
+    polys: list[np.poly1d],
+    lines: list[np.ndarray],
+    h: int,
+    w: int,
+) -> tuple[list[np.poly1d], list[np.ndarray]]:
+    """
+    在相邻两条已知线中间做盲搜，找漏检的虚线。
+    找到后插入到结果列表的对应位置。
+    """
+    if len(polys) < 2:
+        return polys, lines
+
+    roi_y1 = int(h * ROI_Y_START)
+    roi_y2 = int(h * ROI_Y_END)
+    roi_x1 = int(w * ROI_X_START)
+    roi_x2 = int(w * ROI_X_END)
+
+    insert_polys = list(polys)
+    insert_lines = list(lines)
+    offset = 0  # 插入后索引偏移
+
+    for i in range(len(polys) - 1):
+        p_left  = polys[i]
+        p_right = polys[i + 1]
+
+        mid_pts = []
+        for abs_y in range(roi_y1, roi_y2, ROW_STEP):
+            mid_x  = (p_left(abs_y) + p_right(abs_y)) / 2.0
+            x_lo   = int(max(roi_x1, mid_x - BLIND_SEARCH_R))
+            x_hi   = int(min(roi_x2, mid_x + BLIND_SEARCH_R))
+            if x_lo >= x_hi:
+                continue
+
+            row_slice = mask[abs_y, x_lo:x_hi]
+            white_xs  = np.where(row_slice > 0)[0] + x_lo
+            if len(white_xs) > 0:
+                cx = int(np.mean(white_xs))
+                # 排除贴近已知线的点（避免把边界线误认为中间线）
+                if abs(cx - p_left(abs_y)) > 30 and abs(cx - p_right(abs_y)) > 30:
+                    mid_pts.append([float(abs_y), float(cx)])
+
+        if len(mid_pts) < BLIND_MIN_ROWS:
+            continue
+
+        arr = np.array(mid_pts, dtype=np.float32)
+        try:
+            coeffs = np.polyfit(arr[:, 0], arr[:, 1], POLY_DEG)
+            new_poly = np.poly1d(coeffs)
+            insert_idx = i + 1 + offset
+            insert_polys.insert(insert_idx, new_poly)
+            insert_lines.insert(insert_idx, arr)
+            offset += 1
+            print(f"  ✓ 盲搜补全：在 L{i+1}/L{i+2} 之间找到新车道线")
+        except Exception:
+            pass
+
+    return insert_polys, insert_lines
+
+
 # ── 可视化 ───────────────────────────────────────────────────────────────────
 def draw_lanes(frame: np.ndarray,
                polys: list[np.poly1d],
@@ -354,11 +418,17 @@ def main():
     print(f"拟合曲线: {len(polys)} 条（过滤前）")
 
     polys, lines = filter_by_curvature(polys, lines)
-    print(f"保留曲线: {len(polys)} 条  →  划分车道: {len(polys)-1} 个")
+    print(f"保留曲线: {len(polys)} 条（曲率过滤后）")
 
     print("多项式引导远端扫描...")
     polys, lines = refine_with_poly_guide(mask, polys, lines, h, w)
     print(f"精修后曲线: {len(polys)} 条")
+
+    print("盲搜补全漏检线...")
+    polys, lines = blind_search_missing(mask, polys, lines, h, w)
+    # 补全后再过一次曲率过滤，剔除噪声
+    polys, lines = filter_by_curvature(polys, lines)
+    print(f"最终曲线: {len(polys)} 条  →  划分车道: {len(polys)-1} 个")
 
     vis = draw_lanes(frame, polys, lines)
 
