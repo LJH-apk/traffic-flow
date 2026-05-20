@@ -36,6 +36,8 @@ ROW_STEP       = 4      # 每隔多少行扫描一次（加速）
 CLUSTER_GAP    = 60     # 同行内超过此距离视为不同车道线（px）
 TRACK_GAP      = 80     # 跨行追踪：上一行中心与当前中心距离阈值（px）
 MIN_ROW_COUNT  = 40     # 一条车道线至少出现的行数（过滤噪声）
+MIN_ROW_COUNT_FAR = 15  # 远端（ROI 上半段）最少行数
+ROI_FAR_SPLIT     = 0.5 # ROI y 范围内远/近分界（0 = 顶部，1 = 底部）
 
 # ── 多项式次数 ───────────────────────────────────────────────────────────────
 POLY_DEG = 2
@@ -140,10 +142,19 @@ def scan_lane_points(mask: np.ndarray, h: int, w: int) -> list[np.ndarray]:
                 next_id += 1
 
     # 过滤短轨迹
+    roi_y1 = int(h * ROI_Y_START)
+    roi_y2 = int(h * ROI_Y_END)
+    far_thresh_y = roi_y1 + (roi_y2 - roi_y1) * ROI_FAR_SPLIT
+
     lines = []
     for tk in tracks.values():
-        if len(tk["pts"]) >= MIN_ROW_COUNT:
-            lines.append(np.array(tk["pts"], dtype=np.float32))   # (y, x)
+        if not tk["pts"]:
+            continue
+        # 用轨迹点的中位 y 判断远/近端
+        median_y = float(np.median([p[0] for p in tk["pts"]]))
+        thresh = MIN_ROW_COUNT_FAR if median_y < far_thresh_y else MIN_ROW_COUNT
+        if len(tk["pts"]) >= thresh:
+            lines.append(np.array(tk["pts"], dtype=np.float32))
 
     # 按中位 x 排序
     lines.sort(key=lambda pts: np.median(pts[:, 1]))
