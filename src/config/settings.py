@@ -83,3 +83,10 @@ ENTRANCE_ALIASES: dict[str, str] = {
     '南进口': '南进口', 'south': '南进口', 'S': '南进口',
     '东进口': '东进口', 'east':  '东进口', 'E': '东进口',
 }
+
+# ── 测速 ─────────────────────────────────────────────────────────────────────
+SPEED_WINDOW_FRAMES = 15                              # 滑动窗口长度（帧），25fps 下约 0.6s
+SPEED_MIN_DIST_M    = 0.1                             # 小于此距离视为静止（米）
+SPEED_MIN_SAMPLES   = 5                               # 写入 vehicle_stats.csv 的最少采样数
+
+VEHICLE_STATS_CSV_PATH = OUTPUT_DIR / "vehicle_stats.csv"
