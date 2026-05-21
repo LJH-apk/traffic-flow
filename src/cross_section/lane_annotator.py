@@ -466,5 +466,51 @@ def main():
     print(f"Saved to {args.out}")
 
 
+def annotate_homography(
+    image: np.ndarray,
+) -> dict | None:
+    """备用单应矩阵标定：用户点 4 个角点 + 输入物理长宽。
+
+    复用 ZoomPanAnnotator 的视口，把车道线标注改成 4 点矩形标注。
+    使用 n_lanes=1，让用户在 Lane 1 上点 4 个点（矩形 4 角：左上→右上→右下→左下）。
+
+    Returns:
+        {'src_pts': [(x,y)*4], 'world_w': float, 'world_h': float, 'H': 3x3 ndarray}
+        或 None（用户取消或点数不足 4）
+    """
+    print("\n[H 标定] 请在弹出窗口中为 Lane 1 点 4 个角点（左上→右上→右下→左下）")
+    print("           可以是斑马线一条条纹、停止线一段、或任何已知尺寸的矩形")
+    result = annotate(image, n_lanes=1)
+    if result is None or 1 not in result or len(result[1]) != 4:
+        print("[H 标定] 未获得 4 个角点，取消")
+        return None
+
+    src_pts = np.float32(result[1])
+    try:
+        world_w = float(input("\n请输入这个矩形的宽度（米，沿水平方向）: "))
+        world_h = float(input("请输入这个矩形的高度（米，沿垂直方向）: "))
+    except ValueError:
+        print("[H 标定] 输入无效，取消")
+        return None
+
+    dst_pts = np.float32([
+        [0,       0      ],
+        [world_w, 0      ],
+        [world_w, world_h],
+        [0,       world_h],
+    ])
+    H, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    if H is None:
+        print("[H 标定] 单应矩阵计算失败")
+        return None
+
+    return {
+        'src_pts': [tuple(p) for p in result[1]],
+        'world_w': world_w,
+        'world_h': world_h,
+        'H': H,
+    }
+
+
 if __name__ == "__main__":
     main()
