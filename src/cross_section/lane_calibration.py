@@ -35,7 +35,11 @@ from src.config.settings import (
     ENTRANCE_ALIASES,
     VIDEO_PATH,
 )
-from src.cross_section.lane_annotator import annotate as run_annotator
+from src.cross_section.lane_annotator import (
+    annotate as run_annotator,
+    annotate_homography,
+)
+from src.cross_section.zebra_detector import ZebraDetector
 from src.cross_section.lane_detector import build_background
 from src.cross_section.lane_lighting import decide_preset
 
@@ -57,6 +61,8 @@ class CalibrationData:
     start_time: datetime | None = None     # 当前视频起始时间（从文件名解析）
     end_time:   datetime | None = None
     lighting_preset: str = 'off_peak'      # 根据时段+画面综合判断的光照预设
+    homography: np.ndarray | None = None
+    homography_method: str = "fallback_ppm"
 
 
 # ── 文件名解析 ───────────────────────────────────────────────────────────────
@@ -130,7 +136,58 @@ def find_calibration(entrance: str) -> dict | None:
     metadata = json.loads(metadata_path.read_text(encoding='utf-8')) \
                if metadata_path.exists() else {}
 
-    return {'lanes': lanes, 'ref_image': ref_image, 'metadata': metadata}
+    H, method = _load_homography(cal_dir)
+    return {
+        'lanes': lanes,
+        'ref_image': ref_image,
+        'metadata': metadata,
+        'homography': H,
+        'homography_method': method,
+    }
+
+
+# ── 单应矩阵辅助函数 ────────────────────────────────────────────────────────
+def _compute_homography(bg_image: np.ndarray) -> tuple[np.ndarray | None, str]:
+    """优先用 ZebraDetector 自动算 H，失败则进入备用标注流程。"""
+    print("[H] 尝试自动检测斑马线...")
+    zresult = ZebraDetector().detect(bg_image)
+    if zresult is not None:
+        H, n_stripes, _rects = zresult
+        print(f"[H] ✓ 自动检测成功（{n_stripes} 条条纹）")
+        return H, "auto_zebra"
+
+    print("[H] ⚠ 自动检测失败，进入备用人工标定")
+    manual = annotate_homography(bg_image)
+    if manual is None:
+        print("[H] ✗ 备用标定也取消，将使用 PIXELS_PER_METER 兜底")
+        return None, "fallback_ppm"
+    return manual['H'], "manual"
+
+
+def _save_homography(cal_dir: Path, H: np.ndarray, method: str, n_stripes: int = 0) -> None:
+    """保存 H 矩阵到 homography.json。"""
+    data = {
+        'H': H.tolist(),
+        'method': method,
+        'n_stripes': n_stripes,
+        'calibration_date': datetime.now().isoformat(),
+    }
+    (cal_dir / 'homography.json').write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding='utf-8',
+    )
+
+
+def _load_homography(cal_dir: Path) -> tuple[np.ndarray | None, str]:
+    """从 homography.json 读取 H。失败返回 (None, 'fallback_ppm')。"""
+    path = cal_dir / 'homography.json'
+    if not path.exists():
+        return None, 'fallback_ppm'
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return np.array(data['H'], dtype=np.float64), data.get('method', 'unknown')
+    except Exception:
+        return None, 'fallback_ppm'
 
 
 # ── 保存标定 ────────────────────────────────────────────────────────────────
@@ -189,6 +246,12 @@ def get_calibration(video_path: str | Path,
         # 顺便判断光照
         first_frame, _ = build_background(str(video_path), target_frame=100)
         preset = decide_preset(start_time, first_frame)
+        H = existing.get('homography')
+        method = existing.get('homography_method', 'fallback_ppm')
+        if H is None:
+            print(f"⚠ {entrance} 暂无 H 矩阵，使用 PIXELS_PER_METER 兜底")
+        else:
+            print(f"✓ H 矩阵已加载（method={method}）")
         return CalibrationData(
             entrance=entrance,
             lanes=existing['lanes'],
@@ -197,6 +260,8 @@ def get_calibration(video_path: str | Path,
             start_time=start_time,
             end_time=end_time,
             lighting_preset=preset,
+            homography=H,
+            homography_method=method,
         )
 
     # 无标定 → 启动标注流程
@@ -226,7 +291,12 @@ def get_calibration(video_path: str | Path,
         'lane_count':       sum(1 for v in lanes.values() if v),
     }
     cal_dir = save_calibration(entrance, lanes, bg_bgr, metadata)
-    print(f"✓ 已保存到 {cal_dir}")
+    print(f"✓ 车道线已保存到 {cal_dir}")
+
+    H, method = _compute_homography(bg_bgr)
+    if H is not None:
+        _save_homography(cal_dir, H, method)
+        print(f"✓ H 矩阵已保存（method={method}）")
 
     preset = decide_preset(start_time, first_frame)
     return CalibrationData(
@@ -237,6 +307,8 @@ def get_calibration(video_path: str | Path,
         start_time=start_time,
         end_time=end_time,
         lighting_preset=preset,
+        homography=H,
+        homography_method=method,
     )
 
 
@@ -263,6 +335,7 @@ def main():
     print(f"车道线数:    {len(cal.lanes)}")
     for lid, pts in sorted(cal.lanes.items()):
         print(f"  线{lid}: {len(pts)} 点")
+    print(f"H 矩阵:     {'已加载（' + cal.homography_method + '）' if cal.homography is not None else '无（兜底 PPM）'}")
 
 
 if __name__ == "__main__":
