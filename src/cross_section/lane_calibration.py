@@ -147,19 +147,109 @@ def find_calibration(entrance: str) -> dict | None:
 
 
 # ── 单应矩阵辅助函数 ────────────────────────────────────────────────────────
+
+# 路面导向箭头国标尺寸（GB 5768.3-2009，60km/h 设计速度）
+ARROW_LONG_M  = 6.0   # 箭头总长（米）
+ARROW_SHORT_M = 0.4   # 箭头轴宽（米）
+
+
+def _detect_arrow_homography(bg_image: np.ndarray) -> np.ndarray | None:
+    """全图检测路面导向箭头，用国标尺寸计算单应矩阵 H。
+
+    检测流程：
+    1. HSV 白色掩码 + 形态学清理
+    2. 轮廓过滤（面积 + 凸包填充率 + 凸缺陷数）
+    3. 取最大面积候选，求最小外接旋转矩形（minAreaRect）
+    4. 长边 → ARROW_LONG_M，短边 → ARROW_SHORT_M
+    5. findHomography
+
+    Returns:
+        H（3×3）或 None（未检出或计算失败）
+    """
+    import cv2 as _cv2
+
+    hsv  = _cv2.cvtColor(bg_image, _cv2.COLOR_BGR2HSV)
+    mask = _cv2.inRange(hsv, (0, 0, 155), (180, 40, 255))
+    k    = _cv2.getStructuringElement(_cv2.MORPH_RECT, (3, 3))
+    mask = _cv2.erode(mask,  k, iterations=1)
+    mask = _cv2.dilate(mask, k, iterations=2)
+
+    contours, _ = _cv2.findContours(mask, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+    for cnt in contours:
+        area = _cv2.contourArea(cnt)
+        if not (2000 <= area <= 80000):
+            continue
+        hull      = _cv2.convexHull(cnt)
+        hull_area = _cv2.contourArea(hull)
+        solidity  = area / hull_area if hull_area > 0 else 0
+        if not (0.35 <= solidity <= 0.88):
+            continue
+        hull_idx = _cv2.convexHull(cnt, returnPoints=False)
+        try:
+            defects = _cv2.convexityDefects(cnt, hull_idx)
+        except Exception:
+            continue
+        if defects is None:
+            continue
+        n_def = sum(1 for d in defects if d[0][3] / 256.0 > 8)
+        if n_def < 1:
+            continue
+        candidates.append((area, cnt))
+
+    if not candidates:
+        return None
+
+    # 取面积最大的候选
+    _, best_cnt = max(candidates, key=lambda t: t[0])
+
+    # 最小外接旋转矩形 → 4 角点
+    rect   = _cv2.minAreaRect(best_cnt)
+    box    = _cv2.boxPoints(rect).astype(np.float32)  # shape (4,2)
+    w_px, h_px = rect[1]   # 宽、高（可能需要对调以确定长边）
+
+    if w_px < h_px:          # 确保 w_px 是长边
+        w_px, h_px = h_px, w_px
+        # box 顺序也随之调整（旋转 90°）
+        box = np.roll(box, 1, axis=0)
+
+    long_m, short_m = ARROW_LONG_M, ARROW_SHORT_M
+
+    # 目标世界坐标（以箭头左下角为原点，沿车道方向为 y 轴）
+    dst_pts = np.float32([
+        [0,       0      ],
+        [short_m, 0      ],
+        [short_m, long_m ],
+        [0,       long_m ],
+    ])
+
+    H, mask_h = _cv2.findHomography(box, dst_pts, _cv2.RANSAC, 5.0)
+    return H
+
+
 def _compute_homography(bg_image: np.ndarray) -> tuple[np.ndarray | None, str]:
-    """优先用 ZebraDetector 自动算 H，失败则进入备用标注流程。"""
+    """优先用 ZebraDetector，其次路面导向箭头，最后人工标定。"""
+    # 1. 斑马线自动检测
     print("[H] 尝试自动检测斑马线...")
     zresult = ZebraDetector().detect(bg_image)
     if zresult is not None:
         H, n_stripes, _rects = zresult
-        print(f"[H] ✓ 自动检测成功（{n_stripes} 条条纹）")
+        print(f"[H] ✓ 斑马线检测成功（{n_stripes} 条条纹）")
         return H, "auto_zebra"
 
-    print("[H] ⚠ 自动检测失败，进入备用人工标定")
+    # 2. 路面导向箭头（全图）
+    print("[H] ⚠ 斑马线未检出，尝试路面导向箭头...")
+    H = _detect_arrow_homography(bg_image)
+    if H is not None:
+        print(f"[H] ✓ 箭头检测成功（GB 5768.3: {ARROW_LONG_M}m × {ARROW_SHORT_M}m）")
+        return H, "auto_arrow"
+
+    # 3. 人工 4 点备用
+    print("[H] ⚠ 箭头未检出，进入备用人工标定")
     manual = annotate_homography(bg_image)
     if manual is None:
-        print("[H] ✗ 备用标定也取消，将使用 PIXELS_PER_METER 兜底")
+        print("[H] ✗ 备用标定取消，将使用 PIXELS_PER_METER 兜底")
         return None, "fallback_ppm"
     return manual['H'], "manual"
 
