@@ -38,20 +38,27 @@ from src.config.settings import (
     HOMOGRAPHY_MATRIX,
     PIXELS_PER_METER,
     CROSS_SECTION_CSV_PATH,
+    SPEED_WINDOW_FRAMES,
+    SPEED_MIN_DIST_M,
+    SPEED_MIN_SAMPLES,
+    VEHICLE_STATS_CSV_PATH,
 )
 from src.cross_section.zebra_detector import ZebraDetector
 from src.cross_section.counter import CrossSectionDetector
 from src.cross_section.lane_detector import LaneDetector
+from src.cross_section.speed_estimator import SpeedEstimator
+from src.cross_section.lane_calibration import get_calibration
 from src.utils.video_io import open_video, video_meta, make_writer, iter_frames
 from src.utils.visualization import draw_boxes, put_fps_text, put_text
 
 # ── 运行时配置 ────────────────────────────────────────────────────────────────
 _MODEL       = MODEL_DIR / MODEL_NAME          # 推理模型路径
-_START_FRAME = 2250                               # 起始帧号（含），0 = 视频开头
-_END_FRAME   = 3250                            # 终止帧号（不含），None = 视频结尾
+_START_FRAME = 0                               # 起始帧号（含），0 = 视频开头
+_END_FRAME   = 1000                            # 终止帧号（不含），None = 视频结尾
 _OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
+_TEST_VIDEO  = "北进口_20260420075959至20260420081500.mp4"
 
-# 车牌正则：省份简称 + 字母 + 5位字母/数字（标准蓝牌 / 新能源绿牌格式）
+# 车牌正则表达式匹配：省份简称 + 字母 + 5位字母/数字
 # 第1位：中文省份简称
 # 第2位：A-Z（发牌城市代码）
 # 第3-7位：A-Z 或 0-9（流水号，新能源末位可为字母，共5位）
@@ -68,7 +75,7 @@ def _rel_to_abs(
     rel_box: tuple[float, float, float, float],
     x1: int, y1: int, x2: int, y2: int,
 ) -> tuple[int, int, int, int]:
-    """将相对坐标（在车辆 bbox 内的比例）转换为当前帧的绝对像素坐标。"""
+    """将相对坐标，转换为当前帧的绝对像素坐标。"""
     rx1, ry1, rx2, ry2 = rel_box
     vw, vh = x2 - x1, y2 - y1
     return (x1 + int(rx1 * vw), y1 + int(ry1 * vh),
@@ -226,9 +233,76 @@ class TrajectoryTracker:
         self._plate_rec = PlateRecognizer()
         print(f"[Tracker] 模型: {self.model_path.name}  设备: {device}")
 
+    @staticmethod
+    def _build_lane_overlay(
+        height: int, width: int,
+        lanes: dict[int, list[tuple[int, int]]],
+    ) -> np.ndarray:
+        """根据标注车道线点集生成半透明 overlay（启动时一次性生成）。"""
+        from scipy.interpolate import UnivariateSpline
+        overlay = np.zeros((height, width, 3), dtype=np.uint8)
+        lane_colors = {
+            1: (0, 255,   0),
+            2: (0, 200, 255),
+            3: (255,  80, 200),
+            4: (255, 200,   0),
+        }
+        for lid, pts in sorted(lanes.items()):
+            if len(pts) < 4:
+                continue
+            arr = np.array(pts, dtype=np.float64)
+            ys, xs = arr[:, 1], arr[:, 0]
+            order = np.argsort(ys)
+            ys_u, xs_u = ys[order], xs[order]
+            _, uid = np.unique(ys_u, return_index=True)
+            ys_u, xs_u = ys_u[uid], xs_u[uid]
+            try:
+                sp = UnivariateSpline(ys_u, xs_u, k=3, s=200 * len(ys_u))
+                y_lo, y_hi = int(ys_u[0]), int(ys_u[-1])
+                ys_e = np.arange(y_lo, y_hi + 1)
+                xs_e = np.clip(sp(ys_e), 0, width - 1).astype(np.int32)
+                curve = np.stack([xs_e, ys_e], axis=1).reshape(-1, 1, 2)
+                color = lane_colors.get(lid, (200, 200, 200))
+                cv2.polylines(overlay, [curve], False, color, 4)
+            except Exception:
+                pass
+        return overlay
+
+    @staticmethod
+    def _assign_lane(
+        cx: float, cy: float,
+        lanes: dict[int, list[tuple[int, int]]],
+    ) -> int | None:
+        """根据 bbox 底部中心点判断车辆所属车道。"""
+        from scipy.interpolate import UnivariateSpline
+        xs_at_cy: list[tuple[int, float]] = []
+        for lid, pts in sorted(lanes.items()):
+            if len(pts) < 4:
+                continue
+            arr = np.array(pts, dtype=np.float64)
+            ys, xs = arr[:, 1], arr[:, 0]
+            order = np.argsort(ys)
+            ys_u, xs_u = ys[order], xs[order]
+            _, uid = np.unique(ys_u, return_index=True)
+            ys_u, xs_u = ys_u[uid], xs_u[uid]
+            if cy < float(ys_u[0]) or cy > float(ys_u[-1]):
+                return None
+            try:
+                sp = UnivariateSpline(ys_u, xs_u, k=3, s=200 * len(ys_u))
+                xs_at_cy.append((lid, float(sp(cy))))
+            except Exception:
+                return None
+        if len(xs_at_cy) < 2:
+            return None
+        xs_at_cy.sort(key=lambda t: t[1])
+        for i in range(len(xs_at_cy) - 1):
+            if xs_at_cy[i][1] <= cx <= xs_at_cy[i + 1][1]:
+                return i + 1
+        return None
+
     def run(
         self,
-        video_path: str | Path = VIDEO_PATH,
+        video_path: str | Path = _TEST_VIDEO,
         output_video: str | Path = _OUTPUT_VID,
         csv_path: str | Path = TRAJ_CSV_PATH,
         start_frame: int = _START_FRAME,
@@ -277,30 +351,36 @@ class TrajectoryTracker:
         fps_list: list[float] = []
         rows_written = 0
 
-        # ── 断面检测 + 车道线检测初始化（Position A）──────────────────────────
-        # 优先用 settings 中预设的 H；否则尝试从第一帧自动检测斑马线
-        _H = HOMOGRAPHY_MATRIX
-        _zebra_rects: list[tuple[int, int, int, int]] = []  # 条纹矩形（可视化用）
-        _lane_lines: list = []                               # 车道线段（可视化用）
+        # ── 标定加载 + 测速器 + 车道线 overlay 初始化 ───────────────────────
+        cal = get_calibration(video_path)
+        if cal is None:
+            print("[标定] ⚠ 加载失败，退化到默认值")
+            _H = HOMOGRAPHY_MATRIX
+            _lanes: dict[int, list] = {}
+            _lane_overlay: np.ndarray | None = None
+        else:
+            _H = cal.homography
+            _lanes = cal.lanes
+            print(f"[标定] ✓ {cal.entrance} | 车道线 {len(_lanes)} 条 | "
+                  f"H={cal.homography_method} | 光照={cal.lighting_preset}")
+            _lane_overlay = self._build_lane_overlay(
+                meta["height"], meta["width"], _lanes
+            )
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        _ret_ref, _ref_frame = cap.read()
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)  # rewind
+        # 测速器
+        speed_est = SpeedEstimator(
+            homography=_H,
+            fps=video_fps,
+            window=SPEED_WINDOW_FRAMES,
+            pixels_per_meter=PIXELS_PER_METER,
+            min_dist_m=SPEED_MIN_DIST_M,
+        )
 
-        if _ret_ref:
-            # 斑马线检测
-            if _H is None:
-                _zresult = ZebraDetector().detect(_ref_frame)
-                if _zresult is not None:
-                    _H, _n, _zebra_rects = _zresult
-                    print(f"[断面] 自动检测斑马线成功，{_n}条纹，H已计算")
-                else:
-                    print("[断面] 斑马线自动检测失败，使用 PIXELS_PER_METER 兜底")
-            # 车道线检测（一次性，零运行时开销）
-            _lane_lines = LaneDetector().detect(_ref_frame)
-            print(f"[车道] 检测到 {len(_lane_lines)} 条车道线段")
-
-        section_det = CrossSectionDetector(SECTION_LINES, _H, PIXELS_PER_METER, video_fps)
+        # 断面检测器（复用同一 SpeedEstimator）
+        section_det = CrossSectionDetector(
+            SECTION_LINES, _H, PIXELS_PER_METER, video_fps,
+            speed_estimator=speed_est,
+        )
         _section_hit: dict[str, int] = {}
         _HIGHLIGHT_FRAMES = 8
 
@@ -309,6 +389,19 @@ class TrajectoryTracker:
         cross_f = cross_path.open("w", newline="", encoding="utf-8")
         cross_writer = csv.DictWriter(cross_f, fieldnames=self._CROSS_CSV_FIELDS)
         cross_writer.writeheader()
+
+        stats_path = Path(VEHICLE_STATS_CSV_PATH)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        stats_fh = open(stats_path, 'w', newline='', encoding='utf-8')
+        stats_writer = csv.writer(stats_fh)
+        stats_writer.writerow([
+            "track_id", "first_frame", "last_frame", "lane_id",
+            "avg_speed_kmh", "max_speed_kmh", "min_speed_kmh", "n_samples",
+        ])
+
+        last_known_lane: dict[int, int | None] = {}
+        active_tids: set[int] = set()
+        prev_active: set[int] = set()
 
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             writer_csv = csv.DictWriter(f, fieldnames=self._CSV_FIELDS)
@@ -325,6 +418,7 @@ class TrajectoryTracker:
                     device=self.device,
                     conf=self.conf,
                     persist=True,
+                    tracker="botsort.yaml",
                     verbose=False,
                 )[0]
 
@@ -396,6 +490,29 @@ class TrajectoryTracker:
                         plates.append(plate_display)
                         plate_boxes.append(plate_box_display)
 
+                        # 测速 + 车道归属
+                        if tid is not None:
+                            cx_c = float((x1 + x2) / 2)
+                            cy_b = float(y2)  # bbox 底部
+                            speed_est.update(frame_idx, tid, cx_c, cy_b)
+                            v_now = speed_est.instant_speed(tid)
+                            lane_id = self._assign_lane(cx_c, cy_b, _lanes) if _lanes else None
+                            if lane_id is not None:
+                                last_known_lane[tid] = lane_id
+                            active_tids.add(tid)
+
+                            # 速度+车道标签
+                            parts = []
+                            if lane_id is not None:
+                                parts.append(f"L{lane_id}")
+                            if v_now is not None and v_now > 0:
+                                parts.append(f"{v_now:.0f}km/h")
+                            if parts:
+                                label_speed = " ".join(parts)
+                                put_text(frame, label_speed,
+                                         (int(x1), max(0, int(y1) - 22)),
+                                         color=(0, 255, 255))
+
                 # ── 断面过车检测（Position B）──────────────────────────────────
                 for _box, _label, _tid in zip(boxes_xyxy, labels, track_ids):
                     if _tid is None:
@@ -407,12 +524,6 @@ class TrajectoryTracker:
                     ):
                         cross_writer.writerow(ev)
                         _section_hit[ev["section"]] = frame_idx
-
-                # ── 绘制车道线 + 斑马线框（Position C，最底层）────────────────
-                LaneDetector.draw(frame, _lane_lines)
-                for _zx, _zy, _zw, _zh in _zebra_rects:
-                    cv2.rectangle(frame, (_zx, _zy), (_zx + _zw, _zy + _zh),
-                                  (0, 255, 200), 2)
 
                 # ── 绘制断面线（在车辆框下层）────────────────────────────────
                 for _name, _lx1, _ly1, _lx2, _ly2, _, _ in SECTION_LINES:
@@ -433,7 +544,27 @@ class TrajectoryTracker:
                 # 绘制带跟踪ID和车牌的标注框
                 draw_boxes(frame, boxes_xyxy, labels, confs, track_ids, plates)
                 put_fps_text(frame, cur_fps, len(boxes_xyxy))
-                writer.write(frame)
+
+                # 车道线 overlay 叠加
+                annotated = frame
+                if _lane_overlay is not None:
+                    annotated = cv2.addWeighted(frame, 1.0, _lane_overlay, 0.5, 0)
+
+                # 检测消失的 track，写入 vehicle_stats
+                for tid in (prev_active - active_tids):
+                    s = speed_est.finalize(tid)
+                    if s and s['n_samples'] >= SPEED_MIN_SAMPLES:
+                        stats_writer.writerow([
+                            tid, s['first_frame'], s['last_frame'],
+                            last_known_lane.get(tid),
+                            round(s['avg_kmh'], 1), round(s['max_kmh'], 1),
+                            round(s['min_kmh'], 1), s['n_samples'],
+                        ])
+                    last_known_lane.pop(tid, None)
+                prev_active = set(active_tids)
+                active_tids.clear()
+
+                writer.write(annotated)
 
                 if (local_idx + 1) % 30 == 0:
                     avg30 = sum(fps_list[-30:]) / min(len(fps_list), 30)
@@ -441,6 +572,19 @@ class TrajectoryTracker:
                     print(f"[{pct:5.1f}%] 帧 {frame_idx:4d}/{end_frame-1}  "
                           f"近30帧均FPS: {avg30:.1f}  "
                           f"已记录轨迹行: {rows_written}", flush=True)
+
+        # finalize 剩余 track
+        for tid in list(speed_est._tracks.keys()):
+            s = speed_est.finalize(tid)
+            if s and s['n_samples'] >= SPEED_MIN_SAMPLES:
+                stats_writer.writerow([
+                    tid, s['first_frame'], s['last_frame'],
+                    last_known_lane.get(tid),
+                    round(s['avg_kmh'], 1), round(s['max_kmh'], 1),
+                    round(s['min_kmh'], 1), s['n_samples'],
+                ])
+        stats_fh.close()
+        print(f"[Stats] vehicle_stats.csv: {stats_path}")
 
         cap.release()
         writer.release()
@@ -459,4 +603,4 @@ class TrajectoryTracker:
 
 if __name__ == "__main__":
     tracker = TrajectoryTracker()
-    tracker.run(start_frame=_START_FRAME, end_frame=_END_FRAME)
+    tracker.run(video_path=_TEST_VIDEO, start_frame=_START_FRAME, end_frame=_END_FRAME)
