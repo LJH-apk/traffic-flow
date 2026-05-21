@@ -501,7 +501,7 @@ class TrajectoryTracker:
                                 last_known_lane[tid] = lane_id
                             active_tids.add(tid)
 
-                            # 速度+车道标签
+                            # 速度+车道标签（bbox 下方，避免与类别标签重叠）
                             parts = []
                             if lane_id is not None:
                                 parts.append(f"L{lane_id}")
@@ -510,8 +510,9 @@ class TrajectoryTracker:
                             if parts:
                                 label_speed = " ".join(parts)
                                 put_text(frame, label_speed,
-                                         (int(x1), max(0, int(y1) - 22)),
-                                         color=(0, 255, 255))
+                                         (int(x1), min(frame.shape[0] - 20, int(y2) + 24)),
+                                         color=(0, 255, 255),
+                                         font_scale=0.75)
 
                 # ── 断面过车检测（Position B）──────────────────────────────────
                 for _box, _label, _tid in zip(boxes_xyxy, labels, track_ids):
