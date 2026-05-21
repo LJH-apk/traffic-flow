@@ -64,3 +64,22 @@ HOMOGRAPHY_MATRIX: np.ndarray | None = None
 PIXELS_PER_METER: float = 85.0
 
 CROSS_SECTION_CSV_PATH = OUTPUT_DIR / "cross_section.csv"
+
+# ── 车道标定 ──────────────────────────────────────────────────────────────────
+CALIBRATIONS_DIR = _ROOT / "calibrations"
+
+# ── 光照预设（按时段或检测结果切换检测参数）───────────────────────────────────
+LIGHTING_PRESETS: dict[str, dict] = {
+    'morning_peak': dict(conf_thresh=0.30, clahe=False, dehaze=False),
+    'off_peak':     dict(conf_thresh=0.25, clahe=False, dehaze=False),
+    'evening_peak': dict(conf_thresh=0.30, clahe=False, dehaze=False),
+    'dusk':         dict(conf_thresh=0.20, clahe=True,  dehaze=False),
+    'night':        dict(conf_thresh=0.15, clahe=True,  dehaze=True),
+}
+
+# 进口名规范化（统一映射到中文）
+ENTRANCE_ALIASES: dict[str, str] = {
+    '北进口': '北进口', 'north': '北进口', 'N': '北进口',
+    '南进口': '南进口', 'south': '南进口', 'S': '南进口',
+    '东进口': '东进口', 'east':  '东进口', 'E': '东进口',
+}
