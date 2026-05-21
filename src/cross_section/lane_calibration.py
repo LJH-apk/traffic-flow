@@ -230,13 +230,19 @@ def _detect_arrow_homography(bg_image: np.ndarray) -> np.ndarray | None:
 
 def _compute_homography(bg_image: np.ndarray) -> tuple[np.ndarray | None, str]:
     """优先用 ZebraDetector，其次路面导向箭头，最后人工标定。"""
-    # 1. 斑马线自动检测
+    # 1. 斑马线自动检测（≥3 条纹 且 全部条纹 y 跨度 < 画面高度 30%）
     print("[H] 尝试自动检测斑马线...")
-    zresult = ZebraDetector().detect(bg_image)
+    zresult = ZebraDetector(min_stripes=3).detect(bg_image)
     if zresult is not None:
-        H, n_stripes, _rects = zresult
-        print(f"[H] ✓ 斑马线检测成功（{n_stripes} 条条纹）")
-        return H, "auto_zebra"
+        H, n_stripes, rects = zresult
+        img_h = bg_image.shape[0]
+        y_vals = [r[1] for r in rects]          # 每条纹的顶部 y
+        y_span = (max(y_vals) - min(y_vals)) / img_h
+        if y_span < 0.30:                        # 条纹必须集中在 30% 高度范围内
+            print(f"[H] ✓ 斑马线检测成功（{n_stripes} 条条纹，y 跨度 {y_span:.1%}）")
+            return H, "auto_zebra"
+        else:
+            print(f"[H] ⚠ 检测到 {n_stripes} 条纹但分布太散（y 跨度 {y_span:.1%}），忽略")
 
     # 2. 路面导向箭头（全图）
     print("[H] ⚠ 斑马线未检出，尝试路面导向箭头...")
