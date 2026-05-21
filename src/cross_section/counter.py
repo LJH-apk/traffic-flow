@@ -8,9 +8,13 @@
 """
 import math
 from collections import defaultdict, deque
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    from src.cross_section.speed_estimator import SpeedEstimator
 
 
 def detect_color(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> str:
@@ -88,11 +92,13 @@ class CrossSectionDetector:
         homography: np.ndarray | None,
         pixels_per_meter: float,
         video_fps: float,
+        speed_estimator: "SpeedEstimator | None" = None,
     ) -> None:
         self._lines = lines
         self._H = homography
         self._ppm = pixels_per_meter
         self._fps = video_fps
+        self._speed_estimator = speed_estimator
 
         # track_id -> deque of (frame_idx, wx, wy)，保留最近15帧用于速度估算
         self._history: dict[int, deque] = defaultdict(lambda: deque(maxlen=15))
@@ -114,7 +120,15 @@ class CrossSectionDetector:
         return cx / self._ppm, cy / self._ppm
 
     def _estimate_speed(self, tid: int) -> float:
-        """根据历史世界坐标估算速度（km/h）。"""
+        """估算瞬时速度（km/h）。
+
+        优先用外部 SpeedEstimator（保持算法一致性）；
+        否则用内部 _history（向后兼容）。
+        """
+        if self._speed_estimator is not None:
+            v = self._speed_estimator.instant_speed(tid)
+            return round(v, 1) if v is not None else 0.0
+
         hist = self._history[tid]
         if len(hist) < 2:
             return 0.0
