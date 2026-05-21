@@ -273,7 +273,7 @@ class ZoomPanAnnotator:
             f"L{i}:{len(self.lanes[i])}" for i in range(1, self.n_lanes + 1))
         lines.append(f"Current: {LANE_NAMES[self.current_lane]}  [{lane_counts}]")
         lines.append(f"Zoom: {self.zoom * 100:.0f}%   Cursor: ({ox}, {oy})")
-        lines.append("[1-4:lane | Wheel:zoom | MBtn:pan | Space+LBtn:pan]")
+        lines.append("[1-4:lane | +/-:zoom | MBtn or Space+LBtn:pan]")
         lines.append("[Z:undo | C:clear | R:reset | S:save | Q:quit]")
 
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -354,6 +354,15 @@ class ZoomPanAnnotator:
                 self.lanes[self.current_lane].clear()
             elif key == ord('r'):
                 self._reset_viewport()
+            elif key == ord('+') or key == ord('='):
+                # 以光标位置为锚点放大，光标不在窗口内时退化到画面中心
+                sx = self._mouse_sx if 0 <= self._mouse_sx < self.win_w else self.win_w // 2
+                sy = self._mouse_sy if 0 <= self._mouse_sy < self.win_h else self.win_h // 2
+                self._on_wheel(sx, sy, +1)
+            elif key == ord('-') or key == ord('_'):
+                sx = self._mouse_sx if 0 <= self._mouse_sx < self.win_w else self.win_w // 2
+                sy = self._mouse_sy if 0 <= self._mouse_sy < self.win_h else self.win_h // 2
+                self._on_wheel(sx, sy, -1)
             elif key == ord('s'):
                 self._result = {k: list(v) for k, v in self.lanes.items()}
                 self._done = True
