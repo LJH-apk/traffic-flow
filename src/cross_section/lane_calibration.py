@@ -148,9 +148,100 @@ def find_calibration(entrance: str) -> dict | None:
 
 # ── 单应矩阵辅助函数 ────────────────────────────────────────────────────────
 
+# 标准机动车道宽度（米，GB/T 14886）
+LANE_WIDTH_M = 3.5
+
 # 路面导向箭头国标尺寸（GB 5768.3-2009，60km/h 设计速度）
 ARROW_LONG_M  = 6.0   # 箭头总长（米）
 ARROW_SHORT_M = 0.4   # 箭头轴宽（米）
+
+
+def _lane_annotation_homography(
+    bg_image: np.ndarray,
+    lanes: dict[int, list[tuple[int, int]]],
+) -> np.ndarray | None:
+    """用已标注车道线 + 用户输入纵向距离计算单应矩阵 H。
+
+    横向：相邻车道线间距 = LANE_WIDTH_M（3.5m，国标）
+    纵向：用户输入"标注区域沿行驶方向覆盖多少米"
+
+    取相邻两条标注最完整的线，在 y_near 和 y_far 处各取一点，
+    共 4 个像素点对应世界矩形，调用 findHomography。
+
+    Returns:
+        H（3×3）或 None
+    """
+    from scipy.interpolate import UnivariateSpline
+
+    # 找点数最多的两条相邻线
+    sorted_lanes = sorted(
+        [(lid, pts) for lid, pts in lanes.items() if len(pts) >= 4],
+        key=lambda t: t[0],
+    )
+    if len(sorted_lanes) < 2:
+        print("[H] 车道线不足 2 条，无法用车道线标定")
+        return None
+
+    lid1, pts1 = sorted_lanes[0]
+    lid2, pts2 = sorted_lanes[1]
+
+    def make_spline(pts):
+        arr = np.array(pts, dtype=np.float64)
+        ys, xs = arr[:, 1], arr[:, 0]
+        order = np.argsort(ys)
+        ys_u, xs_u = ys[order], xs[order]
+        _, uid = np.unique(ys_u, return_index=True)
+        ys_u, xs_u = ys_u[uid], xs_u[uid]
+        return UnivariateSpline(ys_u, xs_u, k=3, s=200 * len(ys_u)), float(ys_u[0]), float(ys_u[-1])
+
+    sp1, y1_min, y1_max = make_spline(pts1)
+    sp2, y2_min, y2_max = make_spline(pts2)
+
+    y_far  = max(y1_min, y2_min)   # 远端（共同覆盖的顶端）
+    y_near = min(y1_max, y2_max)   # 近端（共同覆盖的底端）
+
+    if y_near - y_far < 50:
+        print("[H] 两条车道线 y 重叠范围太小，无法标定")
+        return None
+
+    # 4 个像素坐标
+    src = np.float32([
+        [sp1(y_near), y_near],   # 左近
+        [sp2(y_near), y_near],   # 右近
+        [sp2(y_far),  y_far ],   # 右远
+        [sp1(y_far),  y_far ],   # 左远
+    ])
+
+    # 横向世界距离（已知）
+    lat_m = LANE_WIDTH_M
+
+    # 纵向世界距离（用户输入）
+    print(f"\n[H 车道线标定] 使用线 {lid1} 和线 {lid2}")
+    print(f"  标注 y 范围：{y_far:.0f}（远端）→ {y_near:.0f}（近端）")
+    print(f"  请估算这段路（远端到近端）沿车辆行驶方向的实际长度")
+    try:
+        long_m = float(input("  纵向距离（米，例如 30）: "))
+    except (ValueError, EOFError):
+        print("[H] 输入无效，取消")
+        return None
+
+    if long_m <= 0:
+        print("[H] 距离必须为正数")
+        return None
+
+    dst = np.float32([
+        [0,     0      ],   # 左近
+        [lat_m, 0      ],   # 右近
+        [lat_m, long_m ],   # 右远
+        [0,     long_m ],   # 左远
+    ])
+
+    H, _ = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+    if H is None:
+        print("[H] findHomography 计算失败")
+    else:
+        print(f"[H] ✓ 车道线标定完成（横向 {lat_m}m × 纵向 {long_m}m）")
+    return H
 
 
 def _detect_arrow_homography(bg_image: np.ndarray) -> np.ndarray | None:
@@ -228,31 +319,34 @@ def _detect_arrow_homography(bg_image: np.ndarray) -> np.ndarray | None:
     return H
 
 
-def _compute_homography(bg_image: np.ndarray) -> tuple[np.ndarray | None, str]:
-    """优先用 ZebraDetector，其次路面导向箭头，最后人工标定。"""
-    # 1. 斑马线自动检测（≥3 条纹 且 全部条纹 y 跨度 < 画面高度 30%）
+def _compute_homography(
+    bg_image: np.ndarray,
+    lanes: dict[int, list[tuple[int, int]]] | None = None,
+) -> tuple[np.ndarray | None, str]:
+    """优先斑马线，其次车道线标定，最后人工 4 点备用。"""
+    # 1. 斑马线自动检测（≥3 条纹 且 y 跨度 < 画面高度 30%）
     print("[H] 尝试自动检测斑马线...")
     zresult = ZebraDetector(min_stripes=3).detect(bg_image)
     if zresult is not None:
         H, n_stripes, rects = zresult
         img_h = bg_image.shape[0]
-        y_vals = [r[1] for r in rects]          # 每条纹的顶部 y
+        y_vals = [r[1] for r in rects]
         y_span = (max(y_vals) - min(y_vals)) / img_h
-        if y_span < 0.30:                        # 条纹必须集中在 30% 高度范围内
+        if y_span < 0.30:
             print(f"[H] ✓ 斑马线检测成功（{n_stripes} 条条纹，y 跨度 {y_span:.1%}）")
             return H, "auto_zebra"
         else:
             print(f"[H] ⚠ 检测到 {n_stripes} 条纹但分布太散（y 跨度 {y_span:.1%}），忽略")
 
-    # 2. 路面导向箭头（全图）
-    print("[H] ⚠ 斑马线未检出，尝试路面导向箭头...")
-    H = _detect_arrow_homography(bg_image)
-    if H is not None:
-        print(f"[H] ✓ 箭头检测成功（GB 5768.3: {ARROW_LONG_M}m × {ARROW_SHORT_M}m）")
-        return H, "auto_arrow"
+    # 2. 已标注车道线 + 用户输入纵向距离
+    if lanes:
+        print("[H] 尝试用已标注车道线标定（横向 3.5m + 纵向距离输入）...")
+        H = _lane_annotation_homography(bg_image, lanes)
+        if H is not None:
+            return H, "lane_annotation"
 
     # 3. 人工 4 点备用
-    print("[H] ⚠ 箭头未检出，进入备用人工标定")
+    print("[H] ⚠ 进入备用人工 4 点标定")
     manual = annotate_homography(bg_image)
     if manual is None:
         print("[H] ✗ 备用标定取消，将使用 PIXELS_PER_METER 兜底")
@@ -389,7 +483,7 @@ def get_calibration(video_path: str | Path,
     cal_dir = save_calibration(entrance, lanes, bg_bgr, metadata)
     print(f"✓ 车道线已保存到 {cal_dir}")
 
-    H, method = _compute_homography(bg_bgr)
+    H, method = _compute_homography(bg_bgr, lanes=lanes)
     if H is not None:
         _save_homography(cal_dir, H, method)
         print(f"✓ H 矩阵已保存（method={method}）")
