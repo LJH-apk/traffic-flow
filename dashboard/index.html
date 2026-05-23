@@ -114,8 +114,12 @@ function fmt(s) {
 
 // ── 数字缓动动画（cubic ease-out，280ms）─────────
 const _prev = {};
+const _rafIds = {};
+
 function animateVal(id, target, isFloat) {
   const el = document.getElementById(id);
+  if (!el) return;
+  if (_rafIds[id] !== undefined) cancelAnimationFrame(_rafIds[id]);
   const from = _prev[id] ?? target;
   _prev[id] = target;
   const start = performance.now();
@@ -124,7 +128,11 @@ function animateVal(id, target, isFloat) {
     const e = 1 - Math.pow(1 - p, 3);
     const cur = from + (target - from) * e;
     el.textContent = isFloat ? cur.toFixed(1) : Math.round(cur).toLocaleString('zh-CN');
-    if (p < 1) requestAnimationFrame(step);
+    if (p < 1) {
+      _rafIds[id] = requestAnimationFrame(step);
+    } else {
+      delete _rafIds[id];
+    }
   })(start);
 }
 
@@ -138,20 +146,21 @@ function computeStats(t, trajData, crossData) {
 
   // 过车事件：cross_section 中 timestamp_s <= t 的行数
   let events = 0;
-  const recentSpeeds = [];
   for (const r of crossData) {
-    if (parseFloat(r.timestamp_s) <= t) {
-      events++;
-      const v = parseFloat(r.speed_kmh);
-      if (v > 0) recentSpeeds.push({ t: parseFloat(r.timestamp_s), v });
-    }
+    if (parseFloat(r.timestamp_s) <= t) events++;
   }
 
-  // 实时均速：最近 20 条有效速度的均值
-  recentSpeeds.sort((a, b) => b.t - a.t);
-  const last20 = recentSpeeds.slice(0, 20);
+  // 实时均速：从末尾反向迭代，取最近 20 条有效速度
+  const last20 = [];
+  for (let i = crossData.length - 1; i >= 0 && last20.length < 20; i--) {
+    const r = crossData[i];
+    if (parseFloat(r.timestamp_s) <= t) {
+      const v = parseFloat(r.speed_kmh);
+      if (v > 0) last20.push(v);
+    }
+  }
   const avgSpeed = last20.length
-    ? last20.reduce((s, r) => s + r.v, 0) / last20.length
+    ? last20.reduce((s, v) => s + v, 0) / last20.length
     : 0;
 
   return { vehicles: vehicleSet.size, events, avgSpeed };
@@ -160,8 +169,8 @@ function computeStats(t, trajData, crossData) {
 // ── 主入口 ────────────────────────────────────────
 async function init() {
   const [trajData, crossData] = await Promise.all([
-    fetch('/api/trajectory').then(r => r.json()).catch(() => []),
-    fetch('/api/cross_section').then(r => r.json()).catch(() => [])
+    fetch('/api/trajectory').then(r => r.json()).catch(err => { console.error('trajectory fetch failed:', err); return []; }),
+    fetch('/api/cross_section').then(r => r.json()).catch(err => { console.error('cross_section fetch failed:', err); return []; })
   ]);
 
   const player = document.getElementById('player');
