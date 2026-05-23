@@ -35,6 +35,8 @@ from src.config.settings import (
     TRAJ_SAMPLE_FPS,
     TRAJ_CSV_PATH,
     SECTION_LINES,
+    SECTION_LINES_MAP,
+    ENTRANCE_ALIASES,
     HOMOGRAPHY_MATRIX,
     PIXELS_PER_METER,
     CROSS_SECTION_CSV_PATH,
@@ -56,6 +58,18 @@ _MODEL       = MODEL_DIR / MODEL_NAME          # 推理模型路径
 _START_FRAME = 0                               # 起始帧号（含），0 = 视频开头
 _END_FRAME   = 1000                            # 终止帧号（不含），None = 视频结尾
 _OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
+
+def _resolve_section_lines(video_path) -> list:
+    """从视频文件名推断进口名，返回对应断面线列表；识别失败则返回全部断面线。"""
+    stem = Path(video_path).stem
+    for alias, canonical in ENTRANCE_ALIASES.items():
+        if alias in stem:
+            lines = SECTION_LINES_MAP.get(canonical, [])
+            if lines:
+                print(f"[断面] 识别到进口：{canonical}，加载 {len(lines)} 条断面线")
+                return lines
+    print(f"[断面] 未识别进口名（文件：{Path(video_path).name}），加载全部 {len(SECTION_LINES)} 条断面线")
+    return SECTION_LINES
 _TEST_VIDEO  = "北进口_20260420075959至20260420081500.mp4"
 
 # 车牌正则表达式匹配：省份简称 + 字母 + 5位字母/数字
@@ -377,8 +391,9 @@ class TrajectoryTracker:
         )
 
         # 断面检测器（复用同一 SpeedEstimator）
+        _section_lines = _resolve_section_lines(video_path)
         section_det = CrossSectionDetector(
-            SECTION_LINES, _H, PIXELS_PER_METER, video_fps,
+            _section_lines, _H, PIXELS_PER_METER, video_fps,
             speed_estimator=speed_est,
         )
         _section_hit: dict[str, int] = {}
@@ -527,7 +542,7 @@ class TrajectoryTracker:
                         _section_hit[ev["section"]] = frame_idx
 
                 # ── 绘制断面线（在车辆框下层）────────────────────────────────
-                for _name, _lx1, _ly1, _lx2, _ly2, _, _ in SECTION_LINES:
+                for _name, _lx1, _ly1, _lx2, _ly2, _, _ in _section_lines:
                     _age = frame_idx - _section_hit.get(_name, -999)
                     _col = (0, 255, 255) if _age <= _HIGHLIGHT_FRAMES else (0, 0, 255)
                     _thi = 4              if _age <= _HIGHLIGHT_FRAMES else 2
