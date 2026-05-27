@@ -46,6 +46,8 @@ from src.config.settings import (
     VEHICLE_STATS_CSV_PATH,
     VEHICLE_LENGTHS_M,
     SECTION_ROAD_LENGTH_M,
+    QUEUE_SPEED_THRESH_KMH,
+    QUEUE_GAP_M,
     EXCEL_REPORT_PATH,
 )
 from src.cross_section.zebra_detector import ZebraDetector
@@ -758,27 +760,39 @@ class TrajectoryTracker:
             occ_pct = round(min(100.0, total_len / SECTION_ROAD_LENGTH_M * 100), 1)
             ws4.append([win * 5, lane if lane != "" else "未知", len(tid_cls), round(total_len, 1), occ_pct])
 
-        # ── Sheet5: 排队长度（每分钟 × 每车道，仅机动车，speed 在 [0,5) km/h）
+        # ── Sheet5: 排队长度（每5秒 × 每车道，仅机动车）
+        # 排队判定：speed ≤ QUEUE_SPEED_THRESH_KMH
+        # 排队长度(米) = Σ各车车身长度 + (n-1) × QUEUE_GAP_M
         _MOTOR_CLASSES = {"car", "bus", "truck"}
         ws5 = wb.create_sheet("排队长度")
-        ws5.append(["统计起始(秒)", "统计结束(秒)", "车道编号", "排队车辆数", "平均排队车速(km/h)"])
-        # (分钟窗口, lane_id) -> {tid: speed}
+        ws5.append([
+            "统计起始(秒)", "统计结束(秒)", "车道编号",
+            "排队车辆数", "排队长度(米)", "平均排队车速(km/h)",
+        ])
+        # (5秒窗口, lane_id) -> {tid: (speed, class_name)}
         queue_bucket: dict[tuple, dict] = defaultdict(dict)
         for rec in traj_records:
             if rec.get("class_name") not in _MOTOR_CLASSES:
-                continue                      # 排除非机动车
+                continue
             spd_raw = rec.get("speed_kmh")
             if spd_raw is None or spd_raw == "":
-                continue                      # 排除历史不足、速度未知的记录
+                continue
             spd = float(spd_raw)
-            if 0.0 <= spd < 5.0:
-                win = int(float(rec.get("timestamp_s", 0)) // 60)
+            if 0.0 <= spd <= QUEUE_SPEED_THRESH_KMH:
+                win  = int(float(rec.get("timestamp_s", 0)) // 5)
                 lane = rec.get("lane_id", "")
-                queue_bucket[(win, lane)][rec.get("track_id")] = spd
+                queue_bucket[(win, lane)][rec.get("track_id")] = (spd, rec.get("class_name", "car"))
         for (win, lane) in sorted(queue_bucket.keys(), key=lambda t: (t[0], str(t[1]))):
-            tid_spd = queue_bucket[(win, lane)]
-            avg_spd = round(sum(tid_spd.values()) / len(tid_spd), 1) if tid_spd else 0.0
-            ws5.append([win * 60, (win + 1) * 60, lane if lane != "" else "未知", len(tid_spd), avg_spd])
+            tid_info = queue_bucket[(win, lane)]
+            n = len(tid_info)
+            avg_spd    = round(sum(v[0] for v in tid_info.values()) / n, 1)
+            total_body = sum(VEHICLE_LENGTHS_M.get(v[1], 4.5) for v in tid_info.values())
+            queue_len  = round(total_body + max(0, n - 1) * QUEUE_GAP_M, 1)
+            ws5.append([
+                win * 5, (win + 1) * 5,
+                lane if lane != "" else "未知",
+                n, queue_len, avg_spd,
+            ])
 
         wb.save(output_path)
         print(f"[Excel] 报表已导出: {output_path}")

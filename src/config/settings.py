@@ -11,7 +11,7 @@ OUTPUT_DIR  = _ROOT / "outputs"                             # 所有生成文件
 MODEL_DIR   = _ROOT                                         # .pt 权重所在目录（暂留根目录）
 
 # ── 模型 ──────────────────────────────────────────────────────────────────────
-MODEL_NAME      = "yolo26m.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
+MODEL_NAME      = "yolo26n.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
 MODEL_NAME_GT   = "yolo26x.pt"  # 伪GT生成器（eval 用）
 DEVICE          = "mps"          # 推理设备：mps / cpu / cuda
 
@@ -55,13 +55,13 @@ SECTION_LINES_MAP: dict[str, list[tuple[str, int, int, int, int, str, str]]] = {
     "北进口": [
         # H 矩阵精确标定，15m 由单应矩阵计算
         ("北进口主断面", 1497, 551,  2190, 534,  "到达", "离去"),
-        ("北进口右转",   2493, 731,  2781, 929,  "右转", "异常"),
+        ("北进口右转",   2493, 731,  2781, 929,  "右转", "直行"),
     ],
     "南进口": [
         # 15m 近似值，依赖北进口 H 估算
         ("南进口主断面", 1637, 501,  2302, 501,  "到达", "离去"),
-        ("南进口掉头",   2382, 655,  2585, 939,  "掉头", "异常"),
-        ("南进口右转",   1542, 630,  1403, 951,  "右转", "异常"),
+        ("南进口掉头",   2382, 655,  2585, 939,  "掉头", "直行"),
+        ("南进口右转",   1542, 630,  1403, 951,  "右转", "直行"),
     ],
     "东进口": [
         # 独立摄像头，2026-05-21 车道线标注标定
@@ -112,3 +112,12 @@ SPEED_MIN_DIST_M    = 0.1                             # 小于此距离视为静
 SPEED_MIN_SAMPLES   = 5                               # 写入 vehicle_stats.csv 的最少采样数
 
 VEHICLE_STATS_CSV_PATH = OUTPUT_DIR / "vehicle_stats.csv"
+
+# ── 统计报表 ──────────────────────────────────────────────────────────────────
+VEHICLE_LENGTHS_M: dict[str, float] = {
+    "car": 4.5, "truck": 8.0, "bus": 12.0, "motorcycle": 2.0, "bicycle": 1.8,
+}
+SECTION_ROAD_LENGTH_M: float = 50.0   # 断面监测路段默认长度（米）
+QUEUE_SPEED_THRESH_KMH: float = 10.0  # 低于此速度视为排队状态（km/h）
+QUEUE_GAP_M: float = 1.5              # 排队车辆平均车间距（米）
+EXCEL_REPORT_PATH = OUTPUT_DIR / "traffic_report.xlsx"
