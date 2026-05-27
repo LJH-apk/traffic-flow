@@ -12,6 +12,8 @@ runs/
 # 根目录遗留的评测图表 / JSON
 *.png
 *.json
+# 标定数据目录例外（纳入版本管理）
+!calibrations/**/*.json
 
 # Python 缓存
 __pycache__/

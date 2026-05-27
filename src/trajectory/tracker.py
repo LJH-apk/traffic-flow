@@ -244,7 +244,7 @@ class TrajectoryTracker:
     """
 
     _CSV_FIELDS = [
-        "frame_id", "timestamp_s", "track_id", "class_name", "lane_id",
+        "frame_id", "timestamp_s", "track_id", "class_name", "lane_id", "lane_type",
         "cx", "cy", "x1", "y1", "x2", "y2", "speed_kmh", "plate",
     ]
     _CROSS_CSV_FIELDS = CrossSectionDetector.CSV_FIELDS
@@ -310,11 +310,15 @@ class TrajectoryTracker:
         cx: float, cy: float,
         lanes: dict[int, list[tuple[int, int]]],
     ) -> int | None:
-        """根据 bbox 底部中心点判断车辆所属车道。"""
+        """根据 bbox 底部中心点判断车辆所属车道编号（区间序号，1-based）。
+
+        返回 None 表示车辆不在任何标注车道内（对向车道或越界），不应计入统计。
+        """
         from scipy.interpolate import UnivariateSpline
+        import numpy as _np
         xs_at_cy: list[tuple[int, float]] = []
         for lid, pts in sorted(lanes.items()):
-            if len(pts) < 4:
+            if len(pts) < 2:
                 continue
             arr = np.array(pts, dtype=np.float64)
             ys, xs = arr[:, 1], arr[:, 0]
@@ -322,13 +326,15 @@ class TrajectoryTracker:
             ys_u, xs_u = ys[order], xs[order]
             _, uid = np.unique(ys_u, return_index=True)
             ys_u, xs_u = ys_u[uid], xs_u[uid]
+            # cy 超出该线的 y 范围时跳过（而非直接返回 None）
             if cy < float(ys_u[0]) or cy > float(ys_u[-1]):
-                return None
+                continue
             try:
-                sp = UnivariateSpline(ys_u, xs_u, k=3, s=200 * len(ys_u))
+                k = min(3, len(ys_u) - 1)  # 点数不足4时降阶：2点→k=1线性
+                sp = UnivariateSpline(ys_u, xs_u, k=k, s=200 * len(ys_u))
                 xs_at_cy.append((lid, float(sp(cy))))
             except Exception:
-                return None
+                continue
         if len(xs_at_cy) < 2:
             return None
         xs_at_cy.sort(key=lambda t: t[1])
@@ -398,10 +404,12 @@ class TrajectoryTracker:
             print("[标定] ⚠ 加载失败，退化到默认值")
             _H = HOMOGRAPHY_MATRIX
             _lanes: dict[int, list] = {}
+            _lane_types: dict[str, str] = {}
             _lane_overlay: np.ndarray | None = None
         else:
             _H = cal.homography
             _lanes = cal.lanes
+            _lane_types: dict[str, str] = cal.metadata.get("lane_types", {})
             print(f"[标定] ✓ {cal.entrance} | 车道线 {len(_lanes)} 条 | "
                   f"H={cal.homography_method} | 光照={cal.lighting_preset}")
             _lane_overlay = self._build_lane_overlay(
@@ -534,6 +542,8 @@ class TrajectoryTracker:
                                          font_scale=0.75)
 
                         # 轨迹采样记录（speed/lane 已是本帧最新值）
+                        # lane_id 为空表示对向/越界车辆，仍记录轨迹，但统计时会过滤
+                        _cur_lane = last_known_lane.get(tid)
                         if should_sample and tid is not None:
                             cx = int(cx_c)
                             cy = (y1 + y2) // 2
@@ -543,12 +553,14 @@ class TrajectoryTracker:
                                 if rel_box is not None else None
                             )
                             _speed_kmh = round(v_now, 1) if v_now is not None else None
+                            _lane_type = _lane_types.get(str(_cur_lane), "") if _cur_lane else ""
                             _row = {
                                 "frame_id":    frame_idx,
                                 "timestamp_s": timestamp_s,
                                 "track_id":    tid,
                                 "class_name":  label,
-                                "lane_id":     last_known_lane.get(tid, ""),
+                                "lane_id":     _cur_lane,
+                                "lane_type":   _lane_type,
                                 "cx":          cx,
                                 "cy":          cy,
                                 "x1":          x1,
