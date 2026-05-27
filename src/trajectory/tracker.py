@@ -283,9 +283,10 @@ class TrajectoryTracker:
             2: (0, 200, 255),
             3: (255,  80, 200),
             4: (255, 200,   0),
+            5: (80,  200, 255),
         }
         for lid, pts in sorted(lanes.items()):
-            if len(pts) < 4:
+            if len(pts) < 2:
                 continue
             arr = np.array(pts, dtype=np.float64)
             ys, xs = arr[:, 1], arr[:, 0]
@@ -294,7 +295,8 @@ class TrajectoryTracker:
             _, uid = np.unique(ys_u, return_index=True)
             ys_u, xs_u = ys_u[uid], xs_u[uid]
             try:
-                sp = UnivariateSpline(ys_u, xs_u, k=3, s=200 * len(ys_u))
+                k = min(3, len(ys_u) - 1)
+                sp = UnivariateSpline(ys_u, xs_u, k=k, s=200 * len(ys_u))
                 y_lo, y_hi = int(ys_u[0]), int(ys_u[-1])
                 ys_e = np.arange(y_lo, y_hi + 1)
                 xs_e = np.clip(sp(ys_e), 0, width - 1).astype(np.int32)
