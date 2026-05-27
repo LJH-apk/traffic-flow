@@ -3,7 +3,7 @@
 
 输出字段（trajectory.csv）::
 
-    frame_id, timestamp_s, track_id, class_name, cx, cy, x1, y1, x2, y2, plate
+    frame_id, timestamp_s, track_id, class_name, cx, cy, x1, y1, x2, y2, speed_kmh, plate
 
 运行示例::
 
@@ -44,6 +44,9 @@ from src.config.settings import (
     SPEED_MIN_DIST_M,
     SPEED_MIN_SAMPLES,
     VEHICLE_STATS_CSV_PATH,
+    VEHICLE_LENGTHS_M,
+    SECTION_ROAD_LENGTH_M,
+    EXCEL_REPORT_PATH,
 )
 from src.cross_section.zebra_detector import ZebraDetector
 from src.cross_section.counter import CrossSectionDetector
@@ -82,7 +85,9 @@ _PLATE_FULL = re.compile(rf"[{_PROVINCE}][A-Z][A-Z0-9]{{5}}")
 # 降级正则：省份字符被 OCR 误读时，从末尾取城市码 + 5位流水号（共6字符）
 # 不加边界限制，直接取字符串最后6位，避免 'MA8R5Z9' 中 'A' 被前置 'M' 阻断
 _PLATE_BODY = re.compile(r"[A-Z][A-Z0-9]{5}$")
-_PLATE_CONF_THRESH = 0.6  # HyperLPR3 置信度阈值，低于此值的结果丢弃
+_PLATE_CONF_THRESH = 0.85  # HyperLPR3 置信度阈值，低于此值的结果丢弃
+_VOTE_MIN = 3              # 至少累积多少次高置信结果才锁定
+_VOTE_MAX = 7              # 每辆车最多保留多少票（防止旧错误票污染）
 
 
 def _rel_to_abs(
@@ -98,20 +103,23 @@ def _rel_to_abs(
 
 # ─────────────────────────────────────────────────────────────────────────────
 class PlateRecognizer:
-    """车牌识别器：使用 HyperLPR3 检测并识别车牌，首次成功后缓存结果。
+    """车牌识别器：使用 HyperLPR3 检测并识别车牌，多帧投票后锁定结果。
 
-    缓存值为 (plate_str, box_xyxy)，其中 box_xyxy 是车牌在完整帧中的坐标，
+    缓存值为 (plate_str, rel_box)，其中 rel_box 是车牌在车辆 bbox 内的相对坐标，
     供上层绘制真实车牌框使用。
 
     Attributes:
-        _cache:   track_id -> (plate_str, rel_box) 的识别缓存，每辆车仅推理一次。
-                  rel_box 为车牌在车辆 bbox 内的相对坐标 (rx1,ry1,rx2,ry2)，
-                  每帧用当前 bbox 还原绝对坐标，从而跟随车辆移动。
+        _cache:   track_id -> (plate_str, rel_box)，已锁定的识别结果。
+        _pending: track_id -> list of (plate_str, conf, rel_box)，待投票的候选列表。
         _enabled: False 表示 hyperlpr3 不可用，recognize() 直接返回空结果。
     """
 
+    # 投票条目类型：(车牌字符串, 置信度, 相对坐标)
+    _VoteEntry = tuple[str, float, tuple[float, float, float, float] | None]
+
     def __init__(self) -> None:
         self._cache:   dict[int, tuple[str, tuple[float, float, float, float] | None]] = {}
+        self._pending: dict[int, list[PlateRecognizer._VoteEntry]] = {}
         self._catcher = None
         self._enabled = False
 
@@ -129,16 +137,16 @@ class PlateRecognizer:
         track_id: int,
         box_xyxy: tuple[int, int, int, int],
     ) -> tuple[str, tuple[float, float, float, float] | None]:
-        """识别车牌，已成功识别的 track_id 直接返回缓存。
+        """识别车牌，累积多帧投票后锁定最优结果。
 
         Args:
             frame:    完整 BGR 帧。
             track_id: 跟踪 ID。
-            box_xyxy: 车辆检测框 (x1, y1, x2, y2)，传入整个车辆区域供检测。
+            box_xyxy: 车辆检测框 (x1, y1, x2, y2)。
 
         Returns:
             (plate_str, rel_box)；rel_box 为车牌在车辆 bbox 内的相对坐标
-            (rx1, ry1, rx2, ry2)，未识别时返回 ("", None)。
+            (rx1, ry1, rx2, ry2)，未锁定时返回 ("", None)。
         """
         if track_id in self._cache:
             return self._cache[track_id]
@@ -159,13 +167,9 @@ class PlateRecognizer:
         except Exception:  # noqa: BLE001
             return "", None
 
-        best_plate: str = ""
-        best_box:   tuple[float, float, float, float] | None = None
-        best_conf:  float = _PLATE_CONF_THRESH
-
         for item in (results or []):
             text, conf = item[0], float(item[1])
-            if conf < best_conf:
+            if conf < _PLATE_CONF_THRESH:
                 continue
             plate = self._match_plate(text)
             if not plate:
@@ -174,14 +178,37 @@ class PlateRecognizer:
             # 使得后续每帧可根据当前 bbox 还原绝对坐标，车牌框跟随车辆移动。
             px1, py1, px2, py2 = item[3]
             rel_box = (px1 / crop_w, py1 / crop_h, px2 / crop_w, py2 / crop_h)
-            best_plate = plate
-            best_box   = rel_box
-            best_conf  = conf
 
-        result: tuple[str, tuple[float, float, float, float] | None] = (best_plate, best_box)
-        if best_plate:
+            votes = self._pending.setdefault(track_id, [])
+            votes.append((plate, conf, rel_box))
+            if len(votes) > _VOTE_MAX:
+                votes.pop(0)
+
+        votes = self._pending.get(track_id, [])
+        if len(votes) >= _VOTE_MIN:
+            result = self._tally(votes)
             self._cache[track_id] = result
-        return result
+            del self._pending[track_id]
+            return result
+
+        return "", None
+
+    @staticmethod
+    def _tally(
+        votes: list[tuple[str, float, tuple[float, float, float, float] | None]],
+    ) -> tuple[str, tuple[float, float, float, float] | None]:
+        """对多帧投票结果取多数，省份字符与车牌主体分别投票。"""
+        from collections import Counter
+
+        provinces = [v[0][0] for v in votes if v[0] and v[0][0] in _PROVINCE]
+        bodies    = [v[0][1:] for v in votes if len(v[0]) > 1]
+
+        province = Counter(provinces).most_common(1)[0][0] if provinces else ""
+        body     = Counter(bodies).most_common(1)[0][0]    if bodies    else ""
+
+        plate   = province + body if province else body
+        rel_box = max(votes, key=lambda v: v[1])[2]  # 取置信度最高的 box
+        return (plate, rel_box)
 
     @staticmethod
     def _match_plate(text: str) -> str:
@@ -189,12 +216,6 @@ class PlateRecognizer:
 
         优先匹配完整格式（省份+城市码+5位），
         降级匹配城市码+5位（省份被误读时）。
-
-        Args:
-            text: OCR 识别的原始文字。
-
-        Returns:
-            提取的车牌字符串，无匹配返回空字符串。
         """
         clean = text.replace(" ", "").upper()
         m = _PLATE_FULL.search(clean)
@@ -202,7 +223,7 @@ class PlateRecognizer:
             return m.group()
         m = _PLATE_BODY.search(clean)
         if m:
-            return m.group()   # 缺省份字符的车牌，仍有意义
+            return m.group()
         return ""
 
 
@@ -221,8 +242,8 @@ class TrajectoryTracker:
     """
 
     _CSV_FIELDS = [
-        "frame_id", "timestamp_s", "track_id", "class_name",
-        "cx", "cy", "x1", "y1", "x2", "y2", "plate",
+        "frame_id", "timestamp_s", "track_id", "class_name", "lane_id",
+        "cx", "cy", "x1", "y1", "x2", "y2", "speed_kmh", "plate",
     ]
     _CROSS_CSV_FIELDS = CrossSectionDetector.CSV_FIELDS
 
@@ -365,6 +386,10 @@ class TrajectoryTracker:
         fps_list: list[float] = []
         rows_written = 0
 
+        # 内存缓存，供最终 Excel 导出
+        _all_traj_records: list[dict] = []
+        _all_cross_events: list[dict] = []
+
         # ── 标定加载 + 测速器 + 车道线 overlay 初始化 ───────────────────────
         cal = get_calibration(video_path)
         if cal is None:
@@ -465,6 +490,10 @@ class TrajectoryTracker:
                         confs.append(conf)
                         track_ids.append(tid)
 
+                        # 每帧：对未锁定车辆积累投票，锁定后不再调用 HyperLPR3
+                        if tid is not None and tid not in self._plate_rec._cache:
+                            self._plate_rec.recognize(frame, tid, (x1, y1, x2, y2))
+
                         # 每帧：从缓存取已确认车牌，用当前 bbox 还原绝对坐标
                         cached = (
                             self._plate_rec._cache.get(tid, ("", None))
@@ -476,39 +505,12 @@ class TrajectoryTracker:
                             if cached_rel_box is not None else None
                         )
 
-                        # 轨迹采样记录
-                        if should_sample and tid is not None:
-                            cx = (x1 + x2) // 2
-                            cy = (y1 + y2) // 2
-                            plate_display, rel_box = self._plate_rec.recognize(
-                                frame, tid, (x1, y1, x2, y2)
-                            )
-                            plate_box_display = (
-                                _rel_to_abs(rel_box, x1, y1, x2, y2)
-                                if rel_box is not None else None
-                            )
-                            writer_csv.writerow({
-                                "frame_id":   frame_idx,
-                                "timestamp_s": timestamp_s,
-                                "track_id":   tid,
-                                "class_name": label,
-                                "cx":         cx,
-                                "cy":         cy,
-                                "x1":         x1,
-                                "y1":         y1,
-                                "x2":         x2,
-                                "y2":         y2,
-                                "plate":      plate_display,
-                            })
-                            rows_written += 1
-
-                        plates.append(plate_display)
-                        plate_boxes.append(plate_box_display)
-
-                        # 测速 + 车道归属
+                        # 测速 + 车道归属（必须在轨迹采样前完成，保证本帧速度/车道已更新）
+                        cx_c = float((x1 + x2) / 2)
+                        cy_b = float(y2)
+                        v_now: float | None = None
+                        lane_id: int | None = None
                         if tid is not None:
-                            cx_c = float((x1 + x2) / 2)
-                            cy_b = float(y2)  # bbox 底部
                             speed_est.update(frame_idx, tid, cx_c, cy_b)
                             v_now = speed_est.instant_speed(tid)
                             lane_id = self._assign_lane(cx_c, cy_b, _lanes) if _lanes else None
@@ -529,6 +531,38 @@ class TrajectoryTracker:
                                          color=(0, 255, 255),
                                          font_scale=0.75)
 
+                        # 轨迹采样记录（speed/lane 已是本帧最新值）
+                        if should_sample and tid is not None:
+                            cx = int(cx_c)
+                            cy = (y1 + y2) // 2
+                            plate_display, rel_box = self._plate_rec._cache.get(tid, ("", None))
+                            plate_box_display = (
+                                _rel_to_abs(rel_box, x1, y1, x2, y2)
+                                if rel_box is not None else None
+                            )
+                            _speed_kmh = round(v_now, 1) if v_now is not None else None
+                            _row = {
+                                "frame_id":    frame_idx,
+                                "timestamp_s": timestamp_s,
+                                "track_id":    tid,
+                                "class_name":  label,
+                                "lane_id":     last_known_lane.get(tid, ""),
+                                "cx":          cx,
+                                "cy":          cy,
+                                "x1":          x1,
+                                "y1":          y1,
+                                "x2":          x2,
+                                "y2":          y2,
+                                "speed_kmh":   _speed_kmh,
+                                "plate":       plate_display,
+                            }
+                            writer_csv.writerow(_row)
+                            _all_traj_records.append(_row)
+                            rows_written += 1
+
+                        plates.append(plate_display)
+                        plate_boxes.append(plate_box_display)
+
                 # ── 断面过车检测（Position B）──────────────────────────────────
                 for _box, _label, _tid in zip(boxes_xyxy, labels, track_ids):
                     if _tid is None:
@@ -538,7 +572,10 @@ class TrajectoryTracker:
                         frame_idx, timestamp_s, _tid, _label,
                         frame, _bx1, _by1, _bx2, _by2,
                     ):
+                        # 将已识别车牌绑定到过线事件（按 track_id 查缓存）
+                        ev["plate"] = self._plate_rec._cache.get(_tid, ("", None))[0]
                         cross_writer.writerow(ev)
+                        _all_cross_events.append(ev)
                         _section_hit[ev["section"]] = frame_idx
 
                 # ── 绘制断面线（在车辆框下层）────────────────────────────────
@@ -614,7 +651,137 @@ class TrajectoryTracker:
         print(f"CSV 输出    : {csv_path}")
         print(f"断面CSV     : {cross_path}")
         print(f"视频输出    : {output_video}")
+
+        # ── 断面过车摘要 ─────────────────────────────────────────────────────
+        from collections import defaultdict as _dd
+        _sec_cat: dict[str, dict[str, int]] = _dd(lambda: _dd(int))
+        for _ev in _all_cross_events:
+            _sec_cat[_ev["section"]][_ev.get("vehicle_category", "未知")] += 1
+        unique_tids = len({r["track_id"] for r in _all_traj_records})
+        total_motor    = sum(e.get("vehicle_category") == "机动车"  for e in _all_cross_events)
+        total_nonmotor = sum(e.get("vehicle_category") == "非机动车" for e in _all_cross_events)
+
+        print(f"\n=== 断面过车摘要 ===")
+        for sec, cats in sorted(_sec_cat.items()):
+            motor    = cats.get("机动车",  0)
+            nonmotor = cats.get("非机动车", 0)
+            print(f"  {sec:<18} 机动车 {motor:3d}辆   非机动车 {nonmotor:3d}辆   合计 {motor+nonmotor:3d}辆")
+        print(f"跟踪车辆总数    : {unique_tids} 辆（唯一 track_id）")
+        print(f"断面过车合计    : 机动车 {total_motor} 辆  /  非机动车 {total_nonmotor} 辆")
+
+        self._export_excel(
+            _all_traj_records, _all_cross_events,
+            self._CSV_FIELDS, self._CROSS_CSV_FIELDS,
+        )
         return csv_path
+
+    def _export_excel(
+        self,
+        traj_records: list[dict],
+        cross_events: list[dict],
+        traj_fields: list[str],
+        cross_fields: list[str],
+        output_path: Path = EXCEL_REPORT_PATH,
+    ) -> None:
+        """将所有数据导出为多 Sheet Excel 报表。"""
+        try:
+            import openpyxl
+        except ImportError:
+            print("[Excel] 未找到 openpyxl，跳过 Excel 导出（pip install openpyxl）")
+            return
+
+        from collections import defaultdict
+
+        _CN = {
+            "frame_id":          "帧编号",
+            "timestamp_s":       "时间戳(秒)",
+            "section":           "断面名称",
+            "arrival_departure": "到达/离去",
+            "track_id":          "车辆ID",
+            "class_name":        "车辆类型",
+            "vehicle_category":  "车辆性质",
+            "lane_id":           "车道编号",
+            "color":             "车身颜色",
+            "direction":         "行驶方向",
+            "speed_kmh":         "速度(km/h)",
+            "headway_s":         "车头时距(秒)",
+            "spacing_m":         "车头间距(米)",
+            "cx":                "中心X",
+            "cy":                "中心Y",
+            "x1":                "左上X",
+            "y1":                "左上Y",
+            "x2":                "右下X",
+            "y2":                "右下Y",
+            "plate":             "车牌号",
+        }
+
+        def _headers(fields: list[str]) -> list[str]:
+            return [_CN.get(f, f) for f in fields]
+
+        wb = openpyxl.Workbook()
+
+        # ── Sheet1: 断面过车 ─────────────────────────────────────────────────
+        ws1 = wb.active
+        ws1.title = "断面过车"
+        ws1.append(_headers(cross_fields))
+        for ev in cross_events:
+            ws1.append([ev.get(f, "") for f in cross_fields])
+
+        # ── Sheet2: 车辆轨迹 ─────────────────────────────────────────────────
+        ws2 = wb.create_sheet("车辆轨迹")
+        ws2.append(_headers(traj_fields))
+        for rec in traj_records:
+            ws2.append([rec.get(f, "") for f in traj_fields])
+
+        # ── Sheet3: 流量统计 Q = N/T（每分钟 × 断面 × 车辆性质）────────────
+        ws3 = wb.create_sheet("流量统计")
+        ws3.append(["统计起始(秒)", "统计结束(秒)", "断面名称", "车辆性质", "过车数", "流量(辆/分钟)"])
+        flow_count: dict[tuple, int] = defaultdict(int)
+        for ev in cross_events:
+            win = int(float(ev.get("timestamp_s", 0)) // 60)
+            flow_count[(win, ev.get("section", ""), ev.get("vehicle_category", ""))] += 1
+        for (win, section, cat), count in sorted(flow_count.items()):
+            ws3.append([win * 60, (win + 1) * 60, section, cat, count, round(count / 1.0, 2)])
+
+        # ── Sheet4: 空间占有率（每5秒 × 每车道）────────────────────────────
+        ws4 = wb.create_sheet("空间占有率")
+        ws4.append(["时间戳(秒)", "车道编号", "在场车辆数", "占用总长度(米)", "空间占有率(%)"])
+        # (5s窗口, lane_id) -> {tid: class_name}
+        occ_bucket: dict[tuple, dict] = defaultdict(dict)
+        for rec in traj_records:
+            win = int(float(rec.get("timestamp_s", 0)) // 5)
+            lane = rec.get("lane_id", "")
+            occ_bucket[(win, lane)][rec.get("track_id")] = rec.get("class_name", "car")
+        for (win, lane) in sorted(occ_bucket.keys(), key=lambda t: (t[0], str(t[1]))):
+            tid_cls = occ_bucket[(win, lane)]
+            total_len = sum(VEHICLE_LENGTHS_M.get(c, 4.5) for c in tid_cls.values())
+            occ_pct = round(min(100.0, total_len / SECTION_ROAD_LENGTH_M * 100), 1)
+            ws4.append([win * 5, lane if lane != "" else "未知", len(tid_cls), round(total_len, 1), occ_pct])
+
+        # ── Sheet5: 排队长度（每分钟 × 每车道，仅机动车，speed 在 [0,5) km/h）
+        _MOTOR_CLASSES = {"car", "bus", "truck"}
+        ws5 = wb.create_sheet("排队长度")
+        ws5.append(["统计起始(秒)", "统计结束(秒)", "车道编号", "排队车辆数", "平均排队车速(km/h)"])
+        # (分钟窗口, lane_id) -> {tid: speed}
+        queue_bucket: dict[tuple, dict] = defaultdict(dict)
+        for rec in traj_records:
+            if rec.get("class_name") not in _MOTOR_CLASSES:
+                continue                      # 排除非机动车
+            spd_raw = rec.get("speed_kmh")
+            if spd_raw is None or spd_raw == "":
+                continue                      # 排除历史不足、速度未知的记录
+            spd = float(spd_raw)
+            if 0.0 <= spd < 5.0:
+                win = int(float(rec.get("timestamp_s", 0)) // 60)
+                lane = rec.get("lane_id", "")
+                queue_bucket[(win, lane)][rec.get("track_id")] = spd
+        for (win, lane) in sorted(queue_bucket.keys(), key=lambda t: (t[0], str(t[1]))):
+            tid_spd = queue_bucket[(win, lane)]
+            avg_spd = round(sum(tid_spd.values()) / len(tid_spd), 1) if tid_spd else 0.0
+            ws5.append([win * 60, (win + 1) * 60, lane if lane != "" else "未知", len(tid_spd), avg_spd])
+
+        wb.save(output_path)
+        print(f"[Excel] 报表已导出: {output_path}")
 
 
 if __name__ == "__main__":
