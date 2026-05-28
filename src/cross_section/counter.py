@@ -3,7 +3,7 @@
 
 输出字段（cross_section.csv）::
 
-    frame_id, timestamp_s, section, track_id, class_name,
+    frame_id, timestamp_s, section, arrival_departure, track_id, class_name,
     color, direction, speed_kmh, headway_s, spacing_m
 """
 import math
@@ -82,9 +82,11 @@ class CrossSectionDetector:
     """
 
     CSV_FIELDS = [
-        "frame_id", "timestamp_s", "section", "track_id", "class_name",
-        "color", "direction", "speed_kmh", "headway_s", "spacing_m",
+        "frame_id", "timestamp_s", "section", "arrival_departure", "track_id", "plate",
+        "class_name", "vehicle_category", "color", "direction", "speed_kmh", "headway_s", "spacing_m",
     ]
+
+    _NON_MOTOR = {"motorcycle", "bicycle"}
 
     def __init__(
         self,
@@ -219,17 +221,28 @@ class CrossSectionDetector:
 
                 self._last_crossing[name][direction] = (timestamp_s, speed, wx)
 
+                if "进口" in name:
+                    arrival_departure = "到达"
+                elif "出口" in name:
+                    arrival_departure = "离去"
+                else:
+                    arrival_departure = "通过"
+
+                vehicle_category = "非机动车" if class_name in self._NON_MOTOR else "机动车"
+
                 events.append({
-                    "frame_id":    frame_idx,
-                    "timestamp_s": timestamp_s,
-                    "section":     name,
-                    "track_id":    tid,
-                    "class_name":  class_name,
-                    "color":       color,
-                    "direction":   direction,
-                    "speed_kmh":   speed,
-                    "headway_s":   headway_s,
-                    "spacing_m":   spacing_m,
+                    "frame_id":          frame_idx,
+                    "timestamp_s":       timestamp_s,
+                    "section":           name,
+                    "arrival_departure": arrival_departure,
+                    "track_id":          tid,
+                    "class_name":        class_name,
+                    "vehicle_category":  vehicle_category,
+                    "color":             color,
+                    "direction":         direction,
+                    "speed_kmh":         speed,
+                    "headway_s":         headway_s,
+                    "spacing_m":         spacing_m,
                 })
 
         return events

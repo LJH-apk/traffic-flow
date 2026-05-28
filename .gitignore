@@ -29,3 +29,26 @@ data/
 
 # 比赛文档（含敏感信息，不纳入版本管理）
 docs/
+
+# Claude Code / IDE 内部文件
+.superpowers/
+.idea/
+.claude/
+
+# 调试输出
+debug_diag/
+
+# 压缩备份
+*.zip
+
+# 字体
+*.ttf
+
+# 过程文档
+PROGRESS.md
+findings.md
+task_plan.md
+
+# 调试/训练脚本（不纳入版本管理）
+test_*.py
+train_*.py
