@@ -11,7 +11,7 @@ OUTPUT_DIR  = _ROOT / "outputs"                             # 所有生成文件
 MODEL_DIR   = _ROOT                                         # .pt 权重所在目录（暂留根目录）
 
 # ── 模型 ──────────────────────────────────────────────────────────────────────
-MODEL_NAME      = "yolo26m.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
+MODEL_NAME      = "yolo26n.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
 MODEL_NAME_GT   = "yolo26x.pt"  # 伪GT生成器（eval 用）
 DEVICE          = "mps"          # 推理设备：mps / cpu / cuda
 

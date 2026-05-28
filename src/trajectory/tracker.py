@@ -625,30 +625,40 @@ class TrajectoryTracker:
                 t3 = time.perf_counter()
                 _t_cross += t3 - t2
 
+                # ── 缩放至 1080p 再绘制（4K 画图是最大瓶颈）─────────────────
+                S = 0.5  # 3840→1920, 2160→1080
+                frame = cv2.resize(frame, (1920, 1080))
+                _lane_1080 = cv2.resize(_lane_overlay, (1920, 1080)) if _lane_overlay is not None else None
+                _sec_lines_1080 = [(_n, int(_a*S), int(_b*S), int(_c*S), int(_d*S), _e, _f)
+                                   for _n, _a, _b, _c, _d, _e, _f in _section_lines]
+                _boxes_1080 = [(int(x1*S), int(y1*S), int(x2*S), int(y2*S)) for (x1, y1, x2, y2) in boxes_xyxy]
+                _plates_1080 = [(int(p[0]*S), int(p[1]*S), int(p[2]*S), int(p[3]*S)) if p else None
+                                for p in plate_boxes]
+
                 # ── 绘制断面线（在车辆框下层）────────────────────────────────
-                for _name, _lx1, _ly1, _lx2, _ly2, _, _ in _section_lines:
+                for _name, _lx1, _ly1, _lx2, _ly2, _, _ in _sec_lines_1080:
                     _age = frame_idx - _section_hit.get(_name, -999)
                     _col = (0, 255, 255) if _age <= _HIGHLIGHT_FRAMES else (0, 0, 255)
-                    _thi = 4              if _age <= _HIGHLIGHT_FRAMES else 2
+                    _thi = 2              if _age <= _HIGHLIGHT_FRAMES else 1
                     cv2.line(frame, (_lx1, _ly1), (_lx2, _ly2), _col, _thi)
-                    put_text(frame, _name, (_lx1, _ly1 - 24), _col)
+                    put_text(frame, _name, (_lx1, _ly1 - 12), _col)
 
                 # 画真实车牌框和识别标签（含中文省份字符，走 PIL 渲染）
-                for plate_str, plate_box in zip(plates, plate_boxes):
+                for plate_str, plate_box in zip(plates, _plates_1080):
                     if not plate_str or plate_box is None:
                         continue
                     px1, py1, px2, py2 = plate_box
-                    cv2.rectangle(frame, (px1, py1), (px2, py2), (0, 255, 255), 2)
-                    put_text(frame, plate_str, (px1, max(0, py1 - 22)), (0, 255, 255))
+                    cv2.rectangle(frame, (px1, py1), (px2, py2), (0, 255, 255), 1)
+                    put_text(frame, plate_str, (px1, max(0, py1 - 11)), (0, 255, 255))
 
                 # 绘制带跟踪ID和车牌的标注框
-                draw_boxes(frame, boxes_xyxy, labels, confs, track_ids, plates)
-                put_fps_text(frame, cur_fps, len(boxes_xyxy))
+                draw_boxes(frame, _boxes_1080, labels, confs, track_ids, plates)
+                put_fps_text(frame, cur_fps, len(_boxes_1080))
 
                 # 车道线 overlay 叠加
                 annotated = frame
-                if _lane_overlay is not None:
-                    annotated = cv2.addWeighted(frame, 1.0, _lane_overlay, 0.5, 0)
+                if _lane_1080 is not None:
+                    annotated = cv2.addWeighted(frame, 1.0, _lane_1080, 0.5, 0)
 
                 # 消失的 track → 进入 grace buffer
                 for tid in (prev_active - active_tids):
@@ -684,7 +694,6 @@ class TrajectoryTracker:
                 prev_active = set(active_tids)
                 active_tids.clear()
 
-                annotated = cv2.resize(annotated, (1920, 1080))
                 writer.write(annotated)
 
                 t4 = time.perf_counter()

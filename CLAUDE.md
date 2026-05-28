@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 逐帧检测（前1000帧，输出 outputs/detection.mp4）
 python3 -u src/detection/detector.py
 
-# 轨迹跟踪 + 车牌识别（输出 outputs/trajectory.mp4 + outputs/trajectory.csv）
+# 轨迹跟踪 + 车牌识别 + 断面过车（输出 trajectory.mp4 / trajectory.csv / cross_section.csv）
 python3 -u src/trajectory/tracker.py
 
 # 在比赛视频上评测精度（伪GT方案，采样200帧）
@@ -32,20 +32,34 @@ python3 -u src/evaluation/eval_on_video.py
 # 在COCO val2017上评测（需下载~1GB数据集，不能用coco128.yaml，会导致结果虚高）
 python3 -u src/evaluation/eval_coco.py
 
+# 手动标定：斑马线→单应矩阵（自动检测失败时使用）
+python3 src/cross_section/calibrate.py
+
 # 轨迹可视化
-python3 -u visualize_trajectories.py        # 静态图
-python3 -u visualize_trajectories_video.py  # 视频叠加
+python3 -u src/utils/visualize_trajectories.py        # 静态图
+python3 -u src/utils/visualize_trajectories_video.py  # 视频叠加
+
+# 车道线手动标注（生成 calibrations/ 标定数据）
+python3 src/cross_section/annotate_lane.py
 ```
 
 ## 代码架构
 
 ```
 src/
-  config/settings.py       # 唯一配置源：路径、模型名、设备、阈值、类别映射
+  config/settings.py       # 唯一配置源：路径、模型名、设备、阈值、类别映射、断面线
   detection/detector.py    # VehicleDetector：纯检测，无跟踪，流式写出视频
   trajectory/tracker.py    # TrajectoryTracker + PlateRecognizer：ByteTrack跟踪 + OCR + CSV
-  utils/video_io.py        # open_video / video_meta / make_writer / iter_frames
-  utils/visualization.py   # draw_boxes / put_fps_text（含PIL中文渲染）
+  cross_section/
+    zebra_detector.py      # ZebraDetector：自适应阈值→水平形态学→单应矩阵 H，返回(H, n, stripe_rects)
+    counter.py             # CrossSectionDetector（叉积过线）+ detect_color（HSV颜色分类）
+    calibrate.py           # 交互式手动标定（斑马线4角点→H矩阵）
+    lane_detector.py       # LaneDetector：Hough+极坐标NMS（当前版本，效果有限）
+  utils/video_io.py                    # open_video / video_meta / make_writer / iter_frames
+  utils/visualization.py               # draw_boxes / put_fps_text（含PIL中文渲染）
+  utils/visualize_trajectories.py      # 静态轨迹图（trajectory.csv → PNG）
+  utils/visualize_trajectories_video.py # 视频轨迹叠加（渐隐效果）
+  cross_section/annotate_lane.py       # 交互式车道线手动标注工具
   evaluation/
     eval_on_video.py       # 伪GT精度评测（yolo26x作GT，对比待测模型）
     eval_coco.py           # ultralytics model.val() 在COCO val2017上评测
@@ -63,6 +77,9 @@ src/
 | `CONF_THRESH` | `0.25` | 检测置信度阈值 |
 | `TRAJ_SAMPLE_FPS` | `1` | 轨迹CSV采样频率（每秒1次） |
 | `VEHICLE_CLASSES` | bicycle/car/motorcycle/bus/truck | COCO类别ID到名称映射（不含person） |
+| `SECTION_LINES` | 断面A/B | 格式：(name, lx1,ly1,lx2,ly2, dir_pos, dir_neg) |
+| `HOMOGRAPHY_MATRIX` | `None` | 像素→路面世界坐标（米），None时用像素兜底 |
+| `PIXELS_PER_METER` | `85.0` | H不可用时的兜底系数 |
 
 ## 已下载模型权重
 
@@ -75,18 +92,36 @@ src/
 
 ## tracker.py 核心流程
 
-`TrajectoryTracker.run()` 主循环：
-1. 每帧调 `model.track(..., persist=True)` 运行 ByteTrack
-2. 每帧从 `PlateRecognizer._cache` 读已确认车牌（零OCR开销）
-3. 采样帧（每 `sample_interval` 帧）调 `PlateRecognizer.recognize()` 跑OCR并写CSV行
-4. 对已识别车牌的车辆画黄色矩形（车辆框底部30%+向下延伸5%，宽度收窄10%）
-5. 调 `draw_boxes(..., plates)` 在标签末尾追加车牌号
+`TrajectoryTracker.run()` 启动时（主循环前）：
+- 读第一帧，`ZebraDetector.detect()` 自动检测斑马线 → 计算单应矩阵 H（失败则用 `PIXELS_PER_METER` 兜底）
+- `LaneDetector.detect()` 检测车道线段（一次性，结果静态复用）
+- 打开 `cross_section.csv`，初始化 `CrossSectionDetector`
 
-`PlateRecognizer` OCR引擎优先级：RapidOCR（ONNX）→ PaddleOCR → 禁用。首次识别成功后缓存，同一 `track_id` 不重复OCR。
+主循环每帧：
+1. `model.track(..., persist=True)` 运行 ByteTrack
+2. 从 `PlateRecognizer._cache` 读已确认车牌（零OCR开销）；采样帧调 `recognize()` 写轨迹CSV行
+3. `CrossSectionDetector.update()` 检测叉积符号翻转 → 过线事件写 `cross_section.csv`
+4. 绘制顺序（从底层到顶层）：车道线（半透明）→ 斑马线框 → 断面线 → 车牌框 → 车辆框
+
+`PlateRecognizer` 使用 HyperLPR3，首次识别成功后缓存，同一 `track_id` 不重复OCR。HyperLPR3 不可用时静默禁用。
+
+## cross_section 模块说明
+
+**`ZebraDetector.detect(frame)`**：返回 `(H_3x3, n_stripes, stripe_rects) | None`。
+stripe_rects 为各条纹 `(x,y,w,h)` 列表，直接用于视频叠加可视化。
+
+**`CrossSectionDetector.update(frame_idx, ts, tid, cls, frame, x1,y1,x2,y2)`**：
+返回本帧触发的过线事件列表（通常为空）。每个事件含：
+`frame_id, timestamp_s, section, track_id, class_name, color, direction, speed_kmh, headway_s, spacing_m`
+
+速度计算：维护最近15帧世界坐标历史（`_history[tid]`），距离/时间×3.6 得 km/h。
+车头时距/间距：记录同断面同方向上一辆车的时间戳和速度（`_last_crossing`）。
+
+**`detect_color(frame, x1,y1,x2,y2)`**：采样 bbox 中央60%×60% 区域，HSV中位数分类为黑/白/银/灰/红/黄/绿/蓝/其他。
 
 ## visualization.py 中文渲染
 
-`draw_boxes` 调用 `_put_text`：含CJK字符时走 Pillow（`/System/Library/Fonts/STHeiti Light.ttc`，字号18），否则走 `cv2.putText`。PIL不可用时静默降级（中文显示为 `???`，功能不受影响）。
+`put_text`：含CJK字符时走 Pillow（`/System/Library/Fonts/STHeiti Light.ttc`，字号18），否则走 `cv2.putText`。PIL不可用时静默降级。
 
 ## 比赛评分要点
 
