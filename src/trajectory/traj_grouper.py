@@ -154,10 +154,10 @@ class TrajGrouper:
         """计算两条轨迹的三指标相似度。
 
         Returns:
-            (cosine_sim, jsd_sim, euc_norm_dist)
+            (cosine_sim, jsd_sim, euc_sim)
             - cosine_sim: [-1, 1]，越高越相似
             - jsd_sim:    [0, 1]，越高越相似
-            - euc_norm_dist: 归一化欧氏距离，越低越相似；与阈值比较时 threshold/100
+            - euc_sim:    [0, 1]，越高越相似（对角线归一化后的相似度）
         """
         # 对齐长度（零填充）
         n = max(len(pts_a), len(pts_b))
@@ -167,7 +167,6 @@ class TrajGrouper:
         arr_b[:len(pts_b)] = pts_b
 
         # 余弦相似度（用首尾向量，对零填充鲁棒）
-        # 取每条轨迹的起点→终点总位移向量
         vec_a = np.array(pts_a[-1]) - np.array(pts_a[0]) if len(pts_a) > 1 else np.zeros(2)
         vec_b = np.array(pts_b[-1]) - np.array(pts_b[0]) if len(pts_b) > 1 else np.zeros(2)
         norm_a = np.linalg.norm(vec_a)
@@ -189,13 +188,13 @@ class TrajGrouper:
             jsd = 0.5
         jsd_sim = max(0.0, 1.0 - jsd)
 
-        # 归一化欧氏距离（比较时与 threshold/100 对比）
+        # 欧氏距离相似度（对角线归一化，转为[0,1]相似度）
+        diag = math.sqrt(width ** 2 + height ** 2)
         diff = arr_a - arr_b
-        diff[:, 0] /= width
-        diff[:, 1] /= height
-        euc_dist = float(np.sqrt((diff ** 2).sum(axis=1)).mean())
+        euc_norm = float(np.sqrt((diff ** 2).sum(axis=1)).mean()) / diag
+        euc_sim = 1.0 / (1.0 + euc_norm)
 
-        return cos_sim, jsd_sim, euc_dist
+        return cos_sim, jsd_sim, euc_sim
 
     @staticmethod
     def _to_hist(norm_xy: np.ndarray, bins: int = 20) -> np.ndarray:
@@ -262,12 +261,12 @@ class TrajGrouper:
                 for j in range(i + 1, n):
                     pts_i = items[i][1]
                     pts_j = items[j][1]
-                    cos_s, jsd_s, euc_d = self._compute_similarity(
+                    cos_s, jsd_s, euc_s = self._compute_similarity(
                         pts_i, pts_j, self.frame_width, self.frame_height
                     )
                     if (cos_s >= self.cos_thresh
                             and jsd_s >= self.jsd_thresh
-                            and euc_d <= self.euc_thresh / 100.0):
+                            and euc_s >= self.euc_thresh):
                         pairs.append((cos_s, i, j))
 
             for _, i, j in sorted(pairs, reverse=True):

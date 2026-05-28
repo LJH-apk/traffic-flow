@@ -126,7 +126,7 @@ EXCEL_REPORT_PATH = OUTPUT_DIR / "traffic_report.xlsx"
 TRAJ_GROUP_INTERVAL_S    = 15.0    # 批量分组触发间隔（秒）
 TRAJ_GROUP_COS_THRESH    = 0.70    # 余弦相似度阈值（0.70–0.95）
 TRAJ_GROUP_JSD_THRESH    = 0.70    # JS散度相似度阈值（1-JSD，0.70–0.95）
-TRAJ_GROUP_EUC_THRESH    = 0.70    # 欧氏距离阈值（使用时除以100，即≤0.0070归一化距离）
+TRAJ_GROUP_EUC_THRESH    = 0.70    # 欧氏距离相似度阈值（对角线归一化，[0,1]，越高越相似）
 TRAJ_GROUP_MIN_FRAMES    = 8       # 短于此帧数的轨迹片段丢弃（遮挡尾迹）
 TRAJ_GROUP_CSV_PATH      = OUTPUT_DIR / "trajectory_groups.csv"
 # 各进口车辆行驶参考方向（图像坐标，Y轴向下）

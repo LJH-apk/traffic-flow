@@ -27,7 +27,7 @@ class TestComputeSimilarity:
         cos_s, jsd_s, euc_s = g._compute_similarity(pts, pts, 3840, 2160)
         assert cos_s == pytest.approx(1.0, abs=1e-6)
         assert jsd_s == pytest.approx(1.0, abs=1e-6)
-        assert euc_s == pytest.approx(0.0, abs=1e-6)
+        assert euc_s == pytest.approx(1.0, abs=1e-6)  # 相同轨迹→距离0→相似度1
 
     def test_zero_pad_alignment(self):
         """短轨迹用零填充后，与自身仍应余弦相似度=1."""
@@ -46,22 +46,22 @@ class TestComputeSimilarity:
         assert cos_s < 0.0   # 方向相反，余弦为负
 
     def test_nearby_parallel_trajectories_low_euc(self):
-        """平行且接近的轨迹欧氏距离归一化后应 < 0.0085."""
+        """平行且接近的轨迹应有高欧氏相似度."""
         g = _grouper()
         pts_a = [(500.0 + i*5, 200.0 + i*10) for i in range(8)]
         pts_b = [(505.0 + i*5, 200.0 + i*10) for i in range(8)]  # x偏移5px
-        _, _, euc_dist = g._compute_similarity(pts_a, pts_b, 3840, 2160)
-        # 5px / 3840 ≈ 0.0013 << 0.0085
-        assert euc_dist < 0.0085
+        _, _, euc_sim = g._compute_similarity(pts_a, pts_b, 3840, 2160)
+        # 5px / diag ≈ 0.001，euc_sim ≈ 0.999
+        assert euc_sim > 0.99
 
     def test_far_apart_trajectories_high_euc(self):
-        """相距较远的轨迹归一化欧氏距离应 > 0.0085."""
+        """相距较远的轨迹应有低欧氏相似度."""
         g = _grouper()
         pts_a = [(100.0, 200.0 + i*10) for i in range(8)]
         pts_b = [(2000.0, 200.0 + i*10) for i in range(8)]  # x相差1900px
-        _, _, euc_dist = g._compute_similarity(pts_a, pts_b, 3840, 2160)
-        # 1900 / 3840 ≈ 0.495 >> 0.0085
-        assert euc_dist > 0.1
+        _, _, euc_sim = g._compute_similarity(pts_a, pts_b, 3840, 2160)
+        # 1900px / diag ≈ 0.431，euc_sim = 1/(1+0.431) ≈ 0.70
+        assert euc_sim < 0.72
 
 
 class TestInferTurnType:
