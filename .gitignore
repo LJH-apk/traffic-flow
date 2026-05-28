@@ -52,3 +52,5 @@ task_plan.md
 # 调试/训练脚本（不纳入版本管理）
 test_*.py
 train_*.py
+# 但 tests/ 目录下的测试文件需要纳入版本管理
+!tests/**/test_*.py
