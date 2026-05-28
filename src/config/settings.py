@@ -121,3 +121,17 @@ SECTION_ROAD_LENGTH_M: float = 50.0   # 断面监测路段默认长度（米）
 QUEUE_SPEED_THRESH_KMH: float = 10.0  # 低于此速度视为排队状态（km/h）
 QUEUE_GAP_M: float = 1.5              # 排队车辆平均车间距（米）
 EXCEL_REPORT_PATH = OUTPUT_DIR / "traffic_report.xlsx"
+
+# ── 轨迹分组 ──────────────────────────────────────────────────────────────────
+TRAJ_GROUP_INTERVAL_S    = 15.0    # 批量分组触发间隔（秒）
+TRAJ_GROUP_COS_THRESH    = 0.85    # 余弦相似度阈值（0.70–0.95）
+TRAJ_GROUP_JSD_THRESH    = 0.85    # JS散度相似度阈值（1-JSD，0.70–0.95）
+TRAJ_GROUP_EUC_THRESH    = 0.85    # 欧氏距离阈值（使用时除以100，即≤0.0085归一化距离）
+TRAJ_GROUP_MIN_FRAMES    = 8       # 短于此帧数的轨迹片段丢弃（遮挡尾迹）
+TRAJ_GROUP_CSV_PATH      = OUTPUT_DIR / "trajectory_groups.csv"
+# 各进口车辆行驶参考方向（图像坐标，Y轴向下）
+ENTRANCE_TRAVEL_DIR: dict[str, tuple[float, float]] = {
+    "北进口": (0.0,  1.0),   # 向南（图像向下）
+    "南进口": (0.0, -1.0),   # 向北（图像向上）
+    "东进口": (-1.0, 0.0),   # 向西（图像向左）
+}
