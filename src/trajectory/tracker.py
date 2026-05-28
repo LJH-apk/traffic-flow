@@ -49,12 +49,15 @@ from src.config.settings import (
     QUEUE_SPEED_THRESH_KMH,
     QUEUE_GAP_M,
     EXCEL_REPORT_PATH,
+    TRAJ_GROUP_INTERVAL_S,
+    TRAJ_GROUP_CSV_PATH,
 )
 from src.cross_section.zebra_detector import ZebraDetector
 from src.cross_section.counter import CrossSectionDetector
 from src.cross_section.lane_detector import LaneDetector
 from src.cross_section.speed_estimator import SpeedEstimator
 from src.cross_section.lane_calibration import get_calibration
+from src.trajectory.traj_grouper import TrajGrouper
 from src.utils.video_io import open_video, video_meta, make_writer, iter_frames
 from src.utils.visualization import draw_boxes, put_fps_text, put_text
 
@@ -427,6 +430,16 @@ class TrajectoryTracker:
             min_dist_m=SPEED_MIN_DIST_M,
         )
 
+        # 轨迹分组器
+        _entrance = cal.entrance if cal is not None else "未知"
+        _grouper = TrajGrouper(
+            interval_s=TRAJ_GROUP_INTERVAL_S,
+            csv_path=TRAJ_GROUP_CSV_PATH,
+            excel_path=EXCEL_REPORT_PATH,
+            frame_width=meta["width"],
+            frame_height=meta["height"],
+        )
+
         # 断面检测器（复用同一 SpeedEstimator）
         _section_lines = _resolve_section_lines(video_path)
         section_det = CrossSectionDetector(
@@ -454,6 +467,8 @@ class TrajectoryTracker:
         last_known_lane: dict[int, int | None] = {}
         active_tids: set[int] = set()
         prev_active: set[int] = set()
+        _traj_buf: dict[int, list[tuple[float, float]]] = {}
+        _tid_cls: dict[int, str] = {}
 
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             writer_csv = csv.DictWriter(f, fieldnames=self._CSV_FIELDS)
@@ -529,6 +544,8 @@ class TrajectoryTracker:
                             if lane_id is not None:
                                 last_known_lane[tid] = lane_id
                             active_tids.add(tid)
+                            _traj_buf.setdefault(tid, []).append((cx_c, float((y1 + y2) / 2)))
+                            _tid_cls[tid] = label
 
                             # 速度+车道标签（bbox 下方，避免与类别标签重叠）
                             parts = []
@@ -629,11 +646,21 @@ class TrajectoryTracker:
                             round(s['avg_kmh'], 1), round(s['max_kmh'], 1),
                             round(s['min_kmh'], 1), s['n_samples'],
                         ])
+                    _pts = _traj_buf.pop(tid, [])
+                    _lid = last_known_lane.get(tid)
+                    _grouper.on_track_end(
+                        tid, _pts, _tid_cls.pop(tid, "car"),
+                        _lid,
+                        _lane_types.get(str(_lid), ""),
+                        _entrance,
+                    )
                     last_known_lane.pop(tid, None)
                 prev_active = set(active_tids)
                 active_tids.clear()
 
                 writer.write(annotated)
+
+                _grouper.tick(timestamp_s)
 
                 if (local_idx + 1) % 30 == 0:
                     avg30 = sum(fps_list[-30:]) / min(len(fps_list), 30)
@@ -654,6 +681,8 @@ class TrajectoryTracker:
                 ])
         stats_fh.close()
         print(f"[Stats] vehicle_stats.csv: {stats_path}")
+
+        _grouper.finalize()
 
         cap.release()
         writer.release()
