@@ -64,7 +64,8 @@ from src.utils.visualization import draw_boxes, put_fps_text, put_text
 # ── 运行时配置 ────────────────────────────────────────────────────────────────
 _MODEL       = MODEL_DIR / MODEL_NAME          # 推理模型路径
 _START_FRAME = 0                               # 起始帧号（含），0 = 视频开头
-_END_FRAME   = 1000                            # 终止帧号（不含），None = 视频结尾
+_END_FRAME   = 4500                            # 终止帧号（不含），None = 视频结尾
+_GRACE_FRAMES = 10                              # track消失后保留帧数，防止碎片化
 _OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
 
 def _resolve_section_lines(video_path) -> list:
@@ -469,6 +470,7 @@ class TrajectoryTracker:
         prev_active: set[int] = set()
         _traj_buf: dict[int, list[tuple[float, float]]] = {}
         _tid_cls: dict[int, str] = {}
+        _grace_buf: dict[int, int] = {}   # tid → 剩余存活帧数
 
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             writer_csv = csv.DictWriter(f, fieldnames=self._CSV_FIELDS)
@@ -544,6 +546,8 @@ class TrajectoryTracker:
                             if lane_id is not None:
                                 last_known_lane[tid] = lane_id
                             active_tids.add(tid)
+                            if tid in _grace_buf:
+                                del _grace_buf[tid]   # 从 grace 复活
                             _traj_buf.setdefault(tid, []).append((cx_c, float((y1 + y2) / 2)))
                             _tid_cls[tid] = label
 
@@ -636,8 +640,15 @@ class TrajectoryTracker:
                 if _lane_overlay is not None:
                     annotated = cv2.addWeighted(frame, 1.0, _lane_overlay, 0.5, 0)
 
-                # 检测消失的 track，写入 vehicle_stats
+                # 消失的 track → 进入 grace buffer
                 for tid in (prev_active - active_tids):
+                    if tid not in _grace_buf:
+                        _grace_buf[tid] = _GRACE_FRAMES
+
+                # grace 到期 → 真正结束
+                expired = [tid for tid, c in _grace_buf.items() if c <= 0]
+                for tid in expired:
+                    del _grace_buf[tid]
                     s = speed_est.finalize(tid)
                     if s and s['n_samples'] >= SPEED_MIN_SAMPLES:
                         stats_writer.writerow([
@@ -655,6 +666,11 @@ class TrajectoryTracker:
                         _entrance,
                     )
                     last_known_lane.pop(tid, None)
+
+                # 递减未到期的 grace 计数
+                for tid in list(_grace_buf):
+                    _grace_buf[tid] -= 1
+
                 prev_active = set(active_tids)
                 active_tids.clear()
 
@@ -668,6 +684,27 @@ class TrajectoryTracker:
                     print(f"[{pct:5.1f}%] 帧 {frame_idx:4d}/{end_frame-1}  "
                           f"近30帧均FPS: {avg30:.1f}  "
                           f"已记录轨迹行: {rows_written}", flush=True)
+
+        # finalize grace buffer 中的 track（视频结束，强制到期）
+        for tid in list(_grace_buf):
+            del _grace_buf[tid]
+            s = speed_est.finalize(tid)
+            if s and s['n_samples'] >= SPEED_MIN_SAMPLES:
+                stats_writer.writerow([
+                    tid, s['first_frame'], s['last_frame'],
+                    last_known_lane.get(tid),
+                    round(s['avg_kmh'], 1), round(s['max_kmh'], 1),
+                    round(s['min_kmh'], 1), s['n_samples'],
+                ])
+            _pts = _traj_buf.pop(tid, [])
+            _lid = last_known_lane.get(tid)
+            _grouper.on_track_end(
+                tid, _pts, _tid_cls.pop(tid, "car"),
+                _lid,
+                _lane_types.get(str(_lid), ""),
+                _entrance,
+            )
+            last_known_lane.pop(tid, None)
 
         # finalize 剩余 track
         for tid in list(speed_est._tracks.keys()):
