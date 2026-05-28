@@ -58,7 +58,7 @@ from src.cross_section.lane_detector import LaneDetector
 from src.cross_section.speed_estimator import SpeedEstimator
 from src.cross_section.lane_calibration import get_calibration
 from src.trajectory.traj_grouper import TrajGrouper
-from src.utils.video_io import open_video, video_meta, make_writer, iter_frames
+from src.utils.video_io import open_video, video_meta, make_writer, iter_frames, AsyncWriter
 from src.utils.visualization import draw_boxes, put_fps_text, put_text
 
 # ── 运行时配置 ────────────────────────────────────────────────────────────────
@@ -387,7 +387,7 @@ class TrajectoryTracker:
         if start_frame > 0:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-        writer = make_writer(output_video, meta["fps"], meta["width"], meta["height"])
+        writer = AsyncWriter(make_writer(output_video, meta["fps"], 1920, 1080))
 
         print(f"[Tracker] 视频: {meta['width']}x{meta['height']}  {video_fps:.1f}fps  "
               f"处理帧: {start_frame} ~ {end_frame}（共{n_frames}帧）  "
@@ -399,6 +399,7 @@ class TrajectoryTracker:
         class_ids    = list(VEHICLE_CLASSES.keys())
         fps_list: list[float] = []
         rows_written = 0
+        _t_infer = _t_post = _t_cross = _t_draw = 0.0  # 各阶段累计耗时
 
         # 内存缓存，供最终 Excel 导出
         _all_traj_records: list[dict] = []
@@ -489,9 +490,12 @@ class TrajectoryTracker:
                     persist=True,
                     tracker="botsort.yaml",
                     verbose=False,
+                    half=True,
                 )[0]
+                t1 = time.perf_counter()
+                _t_infer += t1 - t0
 
-                cur_fps = 1.0 / (time.perf_counter() - t0)
+                cur_fps = 1.0 / (t1 - t0)
                 fps_list.append(cur_fps)
 
                 timestamp_s   = round(frame_idx / video_fps, 3)
@@ -600,6 +604,9 @@ class TrajectoryTracker:
                         plates.append(plate_display)
                         plate_boxes.append(plate_box_display)
 
+                t2 = time.perf_counter()
+                _t_post += t2 - t1
+
                 # ── 断面过车检测（Position B）──────────────────────────────────
                 for _box, _label, _tid in zip(boxes_xyxy, labels, track_ids):
                     if _tid is None:
@@ -614,6 +621,9 @@ class TrajectoryTracker:
                         cross_writer.writerow(ev)
                         _all_cross_events.append(ev)
                         _section_hit[ev["section"]] = frame_idx
+
+                t3 = time.perf_counter()
+                _t_cross += t3 - t2
 
                 # ── 绘制断面线（在车辆框下层）────────────────────────────────
                 for _name, _lx1, _ly1, _lx2, _ly2, _, _ in _section_lines:
@@ -674,16 +684,26 @@ class TrajectoryTracker:
                 prev_active = set(active_tids)
                 active_tids.clear()
 
+                annotated = cv2.resize(annotated, (1920, 1080))
                 writer.write(annotated)
+
+                t4 = time.perf_counter()
+                _t_draw += t4 - t3
 
                 _grouper.tick(timestamp_s)
 
                 if (local_idx + 1) % 30 == 0:
                     avg30 = sum(fps_list[-30:]) / min(len(fps_list), 30)
                     pct   = (local_idx + 1) / n_frames * 100
+                    n = min(local_idx + 1, 30)
                     print(f"[{pct:5.1f}%] 帧 {frame_idx:4d}/{end_frame-1}  "
-                          f"近30帧均FPS: {avg30:.1f}  "
-                          f"已记录轨迹行: {rows_written}", flush=True)
+                          f"FPS:{avg30:.1f} "
+                          f"推理:{_t_infer/n*1000:.0f}ms "
+                          f"后处理:{_t_post/n*1000:.0f}ms "
+                          f"断面:{_t_cross/n*1000:.0f}ms "
+                          f"绘制:{_t_draw/n*1000:.0f}ms "
+                          f"轨迹:{rows_written}", flush=True)
+                    _t_infer = _t_post = _t_cross = _t_draw = 0.0
 
         # finalize grace buffer 中的 track（视频结束，强制到期）
         for tid in list(_grace_buf):

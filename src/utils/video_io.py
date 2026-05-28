@@ -1,6 +1,9 @@
 """
 视频读写工具函数。封装 OpenCV VideoCapture / VideoWriter，消除各模块重复样板代码。
 """
+import atexit
+import queue
+import threading
 import cv2
 from pathlib import Path
 from typing import Generator
@@ -92,3 +95,32 @@ def iter_frames(
         idx += 1
         if max_frames is not None and idx >= max_frames:
             break
+
+
+class AsyncWriter:
+    """异步视频写入器，在后台线程执行 cv2.VideoWriter.write()。"""
+
+    def __init__(self, writer: cv2.VideoWriter, max_pending: int = 30):
+        self._writer = writer
+        self._queue: queue.Queue = queue.Queue(maxsize=max_pending)
+        self._thread = threading.Thread(target=self._worker, daemon=True)
+        self._thread.start()
+        atexit.register(self.release)
+
+    def _worker(self):
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            self._writer.write(item)
+
+    def write(self, frame):
+        self._queue.put(frame.copy())
+
+    def release(self):
+        if self._thread is None:
+            return
+        self._queue.put(None)
+        self._thread.join(timeout=5)
+        self._writer.release()
+        self._thread = None
