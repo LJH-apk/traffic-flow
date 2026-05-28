@@ -64,7 +64,7 @@ from src.utils.visualization import draw_boxes, put_fps_text, put_text
 # ── 运行时配置 ────────────────────────────────────────────────────────────────
 _MODEL       = MODEL_DIR / MODEL_NAME          # 推理模型路径
 _START_FRAME = 0                               # 起始帧号（含），0 = 视频开头
-_END_FRAME   = 4500                            # 终止帧号（不含），None = 视频结尾
+_END_FRAME   = 9000                            # 终止帧号（不含），None = 视频结尾
 _GRACE_FRAMES = 10                              # track消失后保留帧数，防止碎片化
 _OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
 
