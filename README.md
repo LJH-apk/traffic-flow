@@ -23,19 +23,48 @@ pip install ultralytics opencv-python numpy scipy hyperlpr3 openpyxl
 
 ## 快速开始
 
-将比赛视频放入 `data/test_video.mp4`，然后按顺序运行：
+### 1. 准备视频文件
+
+**文件名必须包含进口名**，系统依靠文件名自动加载对应的断面线和车道标定数据：
+
+```
+北进口_20260420075959至20260420081500.mp4   ← 北进口
+南进口_20260420080000至20260420081500.mp4   ← 南进口
+东进口_20260420075958至20260420081459.mp4   ← 东进口
+```
+
+支持的进口关键词：`北进口` / `南进口` / `东进口`（或 `north` / `south` / `east`）。  
+若文件名不含任何进口名，系统会退化为加载全部断面线，断面归属和标定数据将不可用。
+
+将视频放入项目根目录或 `data/` 目录，然后修改 `src/trajectory/tracker.py` 顶部的路径变量：
+
+```python
+_TEST_VIDEO  = "北进口_20260420075959至20260420081500.mp4"  # 修改为实际文件名
+_START_FRAME = 0      # 起始帧，0 = 从头开始
+_END_FRAME   = 9000   # 终止帧，None = 跑到结尾
+```
+
+### 2. 运行检测与跟踪
 
 ```bash
-# 1. 逐帧检测（输出 outputs/detection.mp4）
+# 逐帧检测（可选，输出 outputs/detection.mp4）
 python3 -u src/detection/detector.py
 
-# 2. 轨迹跟踪 + 车牌识别 + 断面过车 + 轨迹分组
-#    输出：trajectory.mp4 / trajectory.csv / cross_section.csv / vehicle_stats.csv
-#          trajectory_groups.csv / traffic_report.xlsx
+# 轨迹跟踪 + 车牌识别 + 断面过车 + 轨迹分组（核心流程）
+# 输出：outputs/trajectory.mp4
+#        outputs/trajectory.csv        逐帧轨迹
+#        outputs/cross_section.csv     断面过车事件
+#        outputs/vehicle_stats.csv     车辆统计
+#        outputs/trajectory_groups.csv 轨迹分组
+#        outputs/traffic_report.xlsx   汇总报表
 python3 -u src/trajectory/tracker.py
+```
 
-# 3. 可视化数据仪表盘（浏览器自动打开 http://localhost:8765）
+### 3. 查看数据仪表盘
+
+```bash
 python3 run_dashboard.py
+# 浏览器自动打开 http://localhost:8765
 ```
 
 ---
