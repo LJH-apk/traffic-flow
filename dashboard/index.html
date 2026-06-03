@@ -3,194 +3,231 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>交通流检测系统</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<title>交通流数据可视化监管大屏</title>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{width:100%;height:100%;background:#000;overflow:hidden;font-family:'Inter',sans-serif}
-
-#stage{position:relative;width:100vw;height:100vh;background:#000;overflow:hidden}
-
-#player{
-  position:absolute;inset:0;width:100%;height:100%;
-  object-fit:contain;background:#000;display:block
-}
-
-/* corner accent lines */
-.corner{position:absolute;width:20px;height:20px;pointer-events:none;opacity:.45}
-.corner-tl{top:12px;left:12px;border-top:2px solid #6366f1;border-left:2px solid #6366f1}
-.corner-tr{top:12px;right:12px;border-top:2px solid #6366f1;border-right:2px solid #6366f1}
-.corner-bl{bottom:12px;left:12px;border-bottom:2px solid #6366f1;border-left:2px solid #6366f1}
-.corner-br{bottom:12px;right:12px;border-bottom:2px solid #6366f1;border-right:2px solid #6366f1}
-
-/* floating panels */
-.panel{
-  position:absolute;
-  background:rgba(8,12,20,.80);
-  border-radius:8px;
-  backdrop-filter:blur(12px);
-  -webkit-backdrop-filter:blur(12px);
-  padding:10px 16px;
-}
-.panel .lbl{font-size:10px;color:#64748b;letter-spacing:.04em;margin-bottom:2px}
-.panel .val{
-  font-family:'JetBrains Mono',monospace;
-  font-size:36px;font-weight:900;line-height:1.05;
-}
-
-/* top-left */
-#p-tl{top:20px;left:20px;border:1px solid rgba(129,140,248,.45);box-shadow:0 0 20px rgba(99,102,241,.15)}
-#p-tl .sys{display:flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#818cf8;letter-spacing:.06em}
-#p-tl .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e;animation:blink 1.8s ease-in-out infinite}
-#p-tl .ts{margin-top:4px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#475569;letter-spacing:.04em}
-
-/* top-right */
-#p-tr{top:20px;right:20px;border:1px solid rgba(245,158,11,.40);box-shadow:0 0 20px rgba(245,158,11,.12);text-align:right}
-#p-tr .val{color:#f59e0b;text-shadow:0 0 20px rgba(245,158,11,.5)}
-
-/* bottom-left */
-#p-bl{bottom:24px;left:20px;border:1px solid rgba(52,211,153,.40);box-shadow:0 0 20px rgba(52,211,153,.12)}
-#p-bl .val-row{display:flex;align-items:baseline;gap:5px}
-#p-bl .val{color:#34d399;text-shadow:0 0 20px rgba(52,211,153,.5)}
-#p-bl .unit{font-size:12px;color:#475569}
-
-/* bottom-right */
-#p-br{bottom:24px;right:20px;border:1px solid rgba(96,165,250,.40);box-shadow:0 0 20px rgba(96,165,250,.12);text-align:right}
-#p-br .val{color:#60a5fa;text-shadow:0 0 20px rgba(96,165,250,.5)}
-
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#05070d;color:#e5edf8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;overflow:hidden}
+button{font:inherit}
+.shell{width:100vw;height:100vh;padding:16px;display:grid;grid-template-rows:64px 1fr 92px;gap:12px;background:
+  linear-gradient(90deg,rgba(45,212,191,.08) 1px,transparent 1px),
+  linear-gradient(0deg,rgba(96,165,250,.06) 1px,transparent 1px),
+  radial-gradient(circle at 50% 0%,rgba(14,165,233,.20),transparent 38%),
+  #05070d;background-size:42px 42px,42px 42px,auto,auto}
+.top{display:grid;grid-template-columns:320px 1fr 360px;align-items:center;gap:12px}
+.brand{height:64px;border:1px solid rgba(45,212,191,.45);background:rgba(5,14,24,.82);border-radius:8px;padding:12px 16px;box-shadow:0 0 24px rgba(45,212,191,.10)}
+.brand h1{margin:0;font-size:22px;letter-spacing:0;font-weight:900;color:#e0faff}
+.brand .sub{margin-top:4px;color:#88a6bd;font-size:12px}
+.titlebar{height:64px;display:flex;align-items:center;justify-content:center;position:relative}
+.titlebar::before,.titlebar::after{content:"";position:absolute;top:31px;width:26%;height:1px;background:linear-gradient(90deg,transparent,#22d3ee)}
+.titlebar::before{left:0}.titlebar::after{right:0;transform:scaleX(-1)}
+.titlebar strong{font-size:28px;font-weight:900;color:#f8fbff;text-shadow:0 0 18px rgba(34,211,238,.55)}
+.status{height:64px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.status .mini{border:1px solid rgba(148,163,184,.25);background:rgba(8,17,31,.82);border-radius:8px;padding:10px 12px}
+.label{font-size:12px;color:#8aa4ba}.value{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:900;margin-top:4px}
+.live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#64748b;margin-right:7px;box-shadow:0 0 8px rgba(100,116,139,.6)}
+.running .live-dot{background:#22c55e;box-shadow:0 0 12px rgba(34,197,94,.9)}
+.main{display:grid;grid-template-columns:minmax(210px,260px) minmax(520px,1fr) minmax(210px,260px);gap:12px;min-height:0}
+.side{display:grid;grid-template-rows:repeat(3,1fr);gap:12px;min-height:0}
+.panel{border:1px solid rgba(96,165,250,.28);background:linear-gradient(180deg,rgba(8,18,34,.88),rgba(5,11,22,.88));border-radius:8px;padding:14px;min-height:0;box-shadow:inset 0 0 18px rgba(15,23,42,.7),0 0 24px rgba(15,118,110,.08)}
+.panel h2{margin:0 0 12px;font-size:14px;color:#bfdbfe;font-weight:800}
+.metric{display:flex;align-items:baseline;gap:8px;margin-top:6px}
+.metric .num{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:42px;line-height:1;font-weight:900;color:#f8fafc;text-shadow:0 0 18px rgba(56,189,248,.28)}
+.metric .unit{font-size:13px;color:#7e99b1}
+.accent-green .num{color:#34d399}.accent-amber .num{color:#fbbf24}.accent-rose .num{color:#fb7185}.accent-blue .num{color:#60a5fa}
+.screen{position:relative;border:1px solid rgba(34,211,238,.48);border-radius:8px;background:#020617;min-height:0;overflow:hidden;box-shadow:0 0 42px rgba(14,165,233,.16)}
+.screen-head{height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid rgba(34,211,238,.24);background:rgba(8,18,32,.92)}
+.screen-head b{font-size:14px;color:#cffafe}.screen-head span{font-size:12px;color:#8aa4ba}
+.media{position:absolute;inset:42px 0 0;background:#000;display:grid;place-items:center}
+#liveStream,#replayVideo{width:100%;height:100%;object-fit:contain;background:#000}
+#replayVideo{display:none}
+.empty{position:absolute;inset:42px 0 0;display:grid;place-items:center;color:#64748b;font-size:14px;pointer-events:none}
+.screen.has-live .empty{display:none}
+.corner{position:absolute;width:22px;height:22px;border-color:#22d3ee;opacity:.78}.tl{top:50px;left:8px;border-top:2px solid;border-left:2px solid}.tr{top:50px;right:8px;border-top:2px solid;border-right:2px solid}.bl{bottom:8px;left:8px;border-bottom:2px solid;border-left:2px solid}.br{bottom:8px;right:8px;border-bottom:2px solid;border-right:2px solid}
+.bars{display:grid;gap:8px}.bar{display:grid;grid-template-columns:46px 1fr 38px;align-items:center;gap:8px;font-size:12px;color:#b6c7d8}.track{height:8px;background:#111827;border-radius:99px;overflow:hidden}.fill{height:100%;width:0;background:linear-gradient(90deg,#22d3ee,#34d399);border-radius:99px}
+.events{display:grid;gap:7px;overflow:hidden}.event{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px;border:1px solid rgba(148,163,184,.18);border-radius:6px;background:rgba(15,23,42,.68);font-size:12px}.event small{color:#8aa4ba}.event b{color:#e5edf8;font-weight:800}
+.bottom{display:grid;grid-template-columns:360px 1fr 330px;gap:12px;min-height:0}
+.controls{display:flex;align-items:center;gap:10px}.btn{height:42px;border:1px solid rgba(148,163,184,.28);background:#101827;color:#e5edf8;border-radius:8px;padding:0 16px;font-weight:800;cursor:pointer}.btn.primary{border-color:rgba(45,212,191,.55);background:#0f766e}.btn.danger{border-color:rgba(244,63,94,.45);background:#881337}.btn:disabled{opacity:.45;cursor:not-allowed}
+.progress{height:8px;background:#111827;border-radius:99px;overflow:hidden;margin-top:12px}.progress span{display:block;width:0;height:100%;background:linear-gradient(90deg,#22d3ee,#fbbf24)}
+.wide-panel{border:1px solid rgba(96,165,250,.24);background:rgba(8,17,31,.84);border-radius:8px;padding:14px;min-width:0}
+.logline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8aa4ba;font-size:12px;margin-top:10px}
+@media(max-width:980px){body{overflow:auto}.shell{height:auto;min-height:100vh;grid-template-rows:auto auto auto}.top,.main,.bottom{grid-template-columns:1fr}.side{grid-template-rows:none}.screen{height:58vh}.status{grid-template-columns:repeat(3,1fr)}}
 </style>
 </head>
 <body>
-<div id="stage">
+<main class="shell" id="app">
+  <header class="top">
+    <section class="brand">
+      <h1>交通流检测平台</h1>
+      <div class="sub">YOLO 跟踪 · 断面过车 · 轨迹统计</div>
+    </section>
+    <section class="titlebar"><strong>交通流数据可视化监管大屏</strong></section>
+    <section class="status" id="statusBox">
+      <div class="mini"><div class="label">运行状态</div><div class="value"><span class="live-dot"></span><span id="runState">待机</span></div></div>
+      <div class="mini"><div class="label">检测 FPS</div><div class="value" id="fpsVal">0.0</div></div>
+      <div class="mini"><div class="label">检测时间</div><div class="value" id="timeVal">00:00</div></div>
+    </section>
+  </header>
 
-  <video id="player" src="/outputs/trajectory.mp4" controls preload="metadata"></video>
+  <section class="main">
+    <aside class="side">
+      <div class="panel accent-green"><h2>累计车辆</h2><div class="metric"><span class="num" id="vehiclesVal">0</span><span class="unit">辆</span></div></div>
+      <div class="panel accent-amber"><h2>实时均速</h2><div class="metric"><span class="num" id="speedVal">0.0</span><span class="unit">km/h</span></div></div>
+      <div class="panel"><h2>车型分布</h2><div class="bars" id="classBars"></div></div>
+    </aside>
 
-  <div class="corner corner-tl"></div>
-  <div class="corner corner-tr"></div>
-  <div class="corner corner-bl"></div>
-  <div class="corner corner-br"></div>
+    <section class="screen" id="screen">
+      <div class="screen-head"><b>实时预览</b><span id="videoName">固定检测视频</span></div>
+      <div class="media">
+        <img id="liveStream" alt="实时预览">
+        <video id="replayVideo" src="/outputs/trajectory.mp4" controls preload="metadata"></video>
+      </div>
+      <div class="empty" id="emptyState">等待检测画面</div>
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    </section>
 
-  <!-- top-left -->
-  <div class="panel" id="p-tl">
-    <div class="sys">
-      <span>⬡ 交通流检测系统</span>
-      <div class="dot"></div>
-      <span style="color:#22c55e;font-size:10px;font-weight:500">LIVE</span>
-    </div>
-    <div class="ts" id="ts">--:-- / --:--</div>
-  </div>
+    <aside class="side">
+      <div class="panel accent-blue"><h2>过车事件</h2><div class="metric"><span class="num" id="eventsVal">0</span><span class="unit">次</span></div></div>
+      <div class="panel accent-rose"><h2>活跃目标</h2><div class="metric"><span class="num" id="activeVal">0</span><span class="unit">个</span></div></div>
+      <div class="panel"><h2>车道流量</h2><div class="bars" id="laneBars"></div></div>
+    </aside>
+  </section>
 
-  <!-- top-right -->
-  <div class="panel" id="p-tr">
-    <div class="lbl">累计车辆</div>
-    <div class="val" id="v-vehicles">0</div>
-  </div>
+  <footer class="bottom">
+    <section class="wide-panel">
+      <div class="controls">
+        <button class="btn primary" id="startBtn">开始检测</button>
+        <button class="btn danger" id="stopBtn">停止检测</button>
+        <button class="btn" id="replayBtn">查看回放</button>
+      </div>
+      <div class="progress"><span id="progressBar"></span></div>
+    </section>
+    <section class="wide-panel">
+      <div class="label">最近过车事件</div>
+      <div class="events" id="eventsList"></div>
+    </section>
+    <section class="wide-panel">
+      <div class="label">系统日志</div>
+      <div class="logline" id="logLine">服务已就绪</div>
+    </section>
+  </footer>
+</main>
 
-  <!-- bottom-left -->
-  <div class="panel" id="p-bl">
-    <div class="lbl">实时均速</div>
-    <div class="val-row">
-      <div class="val" id="v-speed">0.0</div>
-      <div class="unit">km/h</div>
-    </div>
-  </div>
-
-  <!-- bottom-right -->
-  <div class="panel" id="p-br">
-    <div class="lbl">过车事件</div>
-    <div class="val" id="v-events">0</div>
-  </div>
-
-</div>
 <script>
-// ── 格式化 mm:ss ─────────────────────────────────
-function fmt(s) {
-  if (!isFinite(s)) return '--:--';
-  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
-  return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+const $ = (id) => document.getElementById(id);
+const state = { liveStarted: false, replay: false };
+
+function fmtTime(s){
+  const v = Number(s) || 0;
+  const m = Math.floor(v / 60);
+  const sec = Math.floor(v % 60);
+  return String(m).padStart(2,"0") + ":" + String(sec).padStart(2,"0");
 }
 
-// ── 数字缓动动画（cubic ease-out，280ms）─────────
-const _prev = {};
-const _rafIds = {};
+function setText(id, value){ $(id).textContent = value; }
 
-function animateVal(id, target, isFloat) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (_rafIds[id] !== undefined) cancelAnimationFrame(_rafIds[id]);
-  const from = _prev[id] ?? target;
-  _prev[id] = target;
-  const start = performance.now();
-  (function step(now) {
-    const p = Math.min((now - start) / 280, 1);
-    const e = 1 - Math.pow(1 - p, 3);
-    const cur = from + (target - from) * e;
-    el.textContent = isFloat ? cur.toFixed(1) : Math.round(cur).toLocaleString('zh-CN');
-    if (p < 1) {
-      _rafIds[id] = requestAnimationFrame(step);
-    } else {
-      delete _rafIds[id];
-    }
-  })(start);
+function renderBars(id, data){
+  const box = $(id);
+  const entries = Object.entries(data || {}).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const max = Math.max(1, ...entries.map(([,v])=>Number(v)||0));
+  box.innerHTML = entries.length ? entries.map(([name,value]) => {
+    const pct = Math.round((Number(value)||0) / max * 100);
+    return `<div class="bar"><span>${name}</span><span class="track"><i class="fill" style="width:${pct}%"></i></span><b>${value}</b></div>`;
+  }).join("") : '<div class="label">暂无数据</div>';
 }
 
-// ── 状态计算（以当前时间 t 为上界）──────────────
-function computeStats(t, trajData, crossData) {
-  // 累计车辆：trajectory 中 timestamp_s <= t 的唯一 track_id 数
-  const vehicleSet = new Set();
-  for (const r of trajData) {
-    if (parseFloat(r.timestamp_s) <= t) vehicleSet.add(r.track_id);
+function renderEvents(events){
+  const box = $("eventsList");
+  box.innerHTML = (events || []).slice(0,4).map(ev => {
+    const title = `${ev.section || "断面"} · ${ev.direction || "方向"} · ${ev.class_name || "车辆"}`;
+    const speed = Number(ev.speed_kmh || 0).toFixed(1) + " km/h";
+    return `<div class="event"><div><b>${title}</b><br><small>${fmtTime(ev.timestamp_s)} ${ev.plate || ""}</small></div><small>${speed}</small></div>`;
+  }).join("") || '<div class="label">暂无事件</div>';
+}
+
+async function post(url){
+  const res = await fetch(url, {method:"POST"});
+  if(!res.ok) throw new Error(url + " " + res.status);
+  return res.json();
+}
+
+function showLive(){
+  state.replay = false;
+  $("replayVideo").style.display = "none";
+  $("liveStream").style.display = "block";
+  if(!state.liveStarted){
+    $("liveStream").src = "/api/live/stream.mjpg?ts=" + Date.now();
+    state.liveStarted = true;
   }
-
-  // 过车事件：cross_section 中 timestamp_s <= t 的行数
-  let events = 0;
-  for (const r of crossData) {
-    if (parseFloat(r.timestamp_s) <= t) events++;
-  }
-
-  // 实时均速：从末尾反向迭代，取最近 20 条有效速度
-  const last20 = [];
-  for (let i = crossData.length - 1; i >= 0 && last20.length < 20; i--) {
-    const r = crossData[i];
-    if (parseFloat(r.timestamp_s) <= t) {
-      const v = parseFloat(r.speed_kmh);
-      if (v > 0) last20.push(v);
-    }
-  }
-  const avgSpeed = last20.length
-    ? last20.reduce((s, v) => s + v, 0) / last20.length
-    : 0;
-
-  return { vehicles: vehicleSet.size, events, avgSpeed };
 }
 
-// ── 主入口 ────────────────────────────────────────
-async function init() {
-  const [trajData, crossData] = await Promise.all([
-    fetch('/api/trajectory').then(r => r.json()).catch(err => { console.error('trajectory fetch failed:', err); return []; }),
-    fetch('/api/cross_section').then(r => r.json()).catch(err => { console.error('cross_section fetch failed:', err); return []; })
-  ]);
-
-  const player = document.getElementById('player');
-
-  player.addEventListener('timeupdate', () => {
-    const t = player.currentTime;
-    const dur = player.duration;
-
-    // 时间戳
-    document.getElementById('ts').textContent = fmt(t) + ' / ' + fmt(dur);
-
-    // 计算并更新数字
-    const { vehicles, events, avgSpeed } = computeStats(t, trajData, crossData);
-    animateVal('v-vehicles', vehicles, false);
-    animateVal('v-speed',    avgSpeed,  true);
-    animateVal('v-events',   events,    false);
-  });
+function showReplay(){
+  state.replay = true;
+  $("liveStream").style.display = "none";
+  $("replayVideo").style.display = "block";
+  $("replayVideo").play().catch(()=>{});
 }
 
-init();
+async function startDetect(){
+  try{
+    showLive();
+    const data = await post("/api/detect/start");
+    $("logLine").textContent = data.message || "检测已启动";
+  }catch(err){
+    $("logLine").textContent = "启动失败：" + err.message;
+  }
+}
+
+async function stopDetect(){
+  try{
+    const data = await post("/api/detect/stop");
+    $("logLine").textContent = data.stop_requested ? "停止请求已发送" : "停止失败";
+  }catch(err){
+    $("logLine").textContent = "停止失败：" + err.message;
+  }
+}
+
+function applyStatus(snapshot){
+  const running = !!snapshot.running;
+  $("statusBox").classList.toggle("running", running);
+  setText("runState", running ? (snapshot.stop_requested ? "停止中" : "运行中") : (snapshot.error ? "异常" : "待机"));
+  setText("fpsVal", Number(snapshot.progress?.fps || 0).toFixed(1));
+  setText("timeVal", fmtTime(snapshot.progress?.timestamp_s || 0));
+  setText("videoName", snapshot.video || "固定检测视频");
+  $("progressBar").style.width = Number(snapshot.progress?.percent || 0) + "%";
+  $("startBtn").disabled = running;
+  $("stopBtn").disabled = !running;
+  $("screen").classList.toggle("has-live", running || state.liveStarted || state.replay);
+  if(snapshot.error) $("logLine").textContent = "检测异常：" + snapshot.error;
+}
+
+function applyStats(stats){
+  setText("vehiclesVal", stats.vehicles || 0);
+  setText("eventsVal", stats.events || 0);
+  setText("speedVal", Number(stats.avg_speed || 0).toFixed(1));
+  setText("activeVal", stats.active_tracks || 0);
+  renderBars("classBars", stats.class_counts);
+  renderBars("laneBars", stats.lane_counts);
+  renderEvents(stats.recent_events);
+}
+
+async function poll(){
+  try{
+    const [snapshot, stats] = await Promise.all([
+      fetch("/api/live/status").then(r=>r.json()),
+      fetch("/api/live/stats").then(r=>r.json())
+    ]);
+    applyStatus(snapshot);
+    applyStats(stats);
+  }catch(err){
+    $("logLine").textContent = "状态更新失败：" + err.message;
+  }
+}
+
+$("startBtn").addEventListener("click", startDetect);
+$("stopBtn").addEventListener("click", stopDetect);
+$("replayBtn").addEventListener("click", showReplay);
+poll();
+setInterval(poll, 800);
 </script>
 </body>
 </html>

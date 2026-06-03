@@ -67,6 +67,7 @@ _START_FRAME = 0                               # 起始帧号（含），0 = 视
 _END_FRAME   = 9000                            # 终止帧号（不含），None = 视频结尾
 _GRACE_FRAMES = 10                              # track消失后保留帧数，防止碎片化
 _OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
+_LIVE_PREVIEW_FPS = 18.0                       # Web 实时预览发布帧率
 
 def _resolve_section_lines(video_path) -> list:
     """从视频文件名推断进口名，返回对应断面线列表；识别失败则返回全部断面线。"""
@@ -357,6 +358,8 @@ class TrajectoryTracker:
         start_frame: int = _START_FRAME,
         end_frame: Optional[int] = _END_FRAME,
         sample_fps: int = TRAJ_SAMPLE_FPS,
+        live_publisher=None,
+        stop_event=None,
     ) -> Path:
         """运行跟踪并输出轨迹 CSV 和标注视频。
 
@@ -367,6 +370,8 @@ class TrajectoryTracker:
             start_frame:  起始帧号（含），默认 0。
             end_frame:    终止帧号（不含），None 表示处理到视频结尾。
             sample_fps:   每秒采样次数（轨迹记录频率）。
+            live_publisher: 可选实时发布器，接收标注帧、进度和统计快照。
+            stop_event:     可选停止信号，用于 Web 控制台请求优雅退出。
 
         Returns:
             写出的 CSV 文件路径。
@@ -472,12 +477,19 @@ class TrajectoryTracker:
         _traj_buf: dict[int, list[tuple[float, float]]] = {}
         _tid_cls: dict[int, str] = {}
         _grace_buf: dict[int, int] = {}   # tid → 剩余存活帧数
+        _live_vehicle_ids: set[int] = set()
+        _live_recent_events: list[dict] = []
+        _LIVE_FRAME_INTERVAL = max(1, round(video_fps / _LIVE_PREVIEW_FPS))
 
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             writer_csv = csv.DictWriter(f, fieldnames=self._CSV_FIELDS)
             writer_csv.writeheader()
 
             for local_idx, frame in iter_frames(cap, n_frames):
+                if stop_event is not None and stop_event.is_set():
+                    print("[Tracker] 收到停止请求，正在结束检测")
+                    break
+
                 frame_idx = start_frame + local_idx   # 视频中的绝对帧号
                 t0 = time.perf_counter()
 
@@ -502,6 +514,9 @@ class TrajectoryTracker:
                 should_sample = (frame_idx % sample_interval == 0)
 
                 boxes_xyxy, labels, confs, track_ids, plates, plate_boxes = [], [], [], [], [], []
+                _live_class_counts: dict[str, int] = {}
+                _live_lane_counts: dict[str, int] = {}
+                _live_speed_samples: list[float] = []
 
                 boxes_data = results.boxes
                 if boxes_data is not None and len(boxes_data):
@@ -522,6 +537,7 @@ class TrajectoryTracker:
                         labels.append(label)
                         confs.append(conf)
                         track_ids.append(tid)
+                        _live_class_counts[label] = _live_class_counts.get(label, 0) + 1
 
                         # 每帧：对未锁定车辆积累投票，锁定后不再调用 HyperLPR3
                         if tid is not None and tid not in self._plate_rec._cache:
@@ -549,11 +565,15 @@ class TrajectoryTracker:
                             lane_id = self._assign_lane(cx_c, cy_b, _lanes) if _lanes else None
                             if lane_id is not None:
                                 last_known_lane[tid] = lane_id
+                                _live_lane_counts[str(lane_id)] = _live_lane_counts.get(str(lane_id), 0) + 1
                             active_tids.add(tid)
+                            _live_vehicle_ids.add(tid)
                             if tid in _grace_buf:
                                 del _grace_buf[tid]   # 从 grace 复活
                             _traj_buf.setdefault(tid, []).append((cx_c, float((y1 + y2) / 2)))
                             _tid_cls[tid] = label
+                            if v_now is not None and v_now > 0:
+                                _live_speed_samples.append(float(v_now))
 
                             # 速度+车道标签（bbox 下方，避免与类别标签重叠）
                             parts = []
@@ -620,6 +640,15 @@ class TrajectoryTracker:
                         ev["plate"] = self._plate_rec._cache.get(_tid, ("", None))[0]
                         cross_writer.writerow(ev)
                         _all_cross_events.append(ev)
+                        _live_recent_events.append({
+                            "timestamp_s": ev.get("timestamp_s", timestamp_s),
+                            "section": ev.get("section", ""),
+                            "direction": ev.get("direction", ""),
+                            "class_name": ev.get("class_name", ""),
+                            "speed_kmh": ev.get("speed_kmh", 0),
+                            "plate": ev.get("plate", ""),
+                        })
+                        _live_recent_events = _live_recent_events[-8:]
                         _section_hit[ev["section"]] = frame_idx
 
                 t3 = time.perf_counter()
@@ -659,6 +688,24 @@ class TrajectoryTracker:
                 annotated = frame
                 if _lane_1080 is not None:
                     annotated = cv2.addWeighted(frame, 1.0, _lane_1080, 0.5, 0)
+
+                if live_publisher is not None:
+                    avg_live_speed = (
+                        sum(_live_speed_samples) / len(_live_speed_samples)
+                        if _live_speed_samples else 0.0
+                    )
+                    live_publisher.update_progress(frame_idx, timestamp_s, cur_fps)
+                    live_publisher.publish_stats({
+                        "vehicles": len(_live_vehicle_ids),
+                        "events": len(_all_cross_events),
+                        "avg_speed": round(avg_live_speed, 1),
+                        "active_tracks": sum(1 for tid in track_ids if tid is not None),
+                        "recent_events": list(reversed(_live_recent_events)),
+                        "class_counts": _live_class_counts,
+                        "lane_counts": _live_lane_counts,
+                    })
+                    if frame_idx % _LIVE_FRAME_INTERVAL == 0:
+                        live_publisher.publish_frame(annotated, width=960, quality=68)
 
                 # 消失的 track → 进入 grace buffer
                 for tid in (prev_active - active_tids):
