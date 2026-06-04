@@ -4,7 +4,7 @@
 替代项目早期的 annotate_lane.py，支持：
 - 鼠标滚轮缩放（聚焦光标）
 - 中键拖拽平移
-- 4 条车道线并行标注
+- 最多 6 条车道线并行标注
 - 实时坐标显示
 
 接口：annotate(image) -> 标注 dict
@@ -25,9 +25,11 @@ LANE_COLORS = {
     2: (0, 200, 255),   # yellow
     3: (255, 80, 200),  # purple-pink
     4: (255, 200,  0),  # cyan-blue
+    5: (80, 200, 255),  # orange
+    6: (180, 120, 255), # violet
 }
 
-LANE_NAMES = {1: "Lane1", 2: "Lane2", 3: "Lane3", 4: "Lane4"}
+LANE_NAMES = {i: f"Lane{i}" for i in range(1, 7)}
 
 ZOOM_MIN = 0.05
 ZOOM_MAX = 8.0
@@ -50,7 +52,7 @@ class ZoomPanAnnotator:
                  win_w: int = 1280, win_h: int = 800):
         self.orig = image.copy()
         self.h, self.w = image.shape[:2]
-        self.n_lanes = min(n_lanes, 4)
+        self.n_lanes = min(n_lanes, 6)
 
         self.win_w = win_w
         self.win_h = win_h
@@ -273,7 +275,7 @@ class ZoomPanAnnotator:
             f"L{i}:{len(self.lanes[i])}" for i in range(1, self.n_lanes + 1))
         lines.append(f"Current: {LANE_NAMES[self.current_lane]}  [{lane_counts}]")
         lines.append(f"Zoom: {self.zoom * 100:.0f}%   Cursor: ({ox}, {oy})")
-        lines.append("[1-4:lane | +/-:zoom | MBtn or Space+LBtn:pan]")
+        lines.append("[1-6:lane | +/-:zoom | MBtn or Space+LBtn:pan]")
         lines.append("[Z:undo | C:clear | R:reset | S:save | Q:quit]")
 
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -339,14 +341,10 @@ class ZoomPanAnnotator:
             cv2.imshow(self.win_name, frame)
             key = cv2.waitKey(16) & 0xFF  # ~60fps
 
-            if key == ord('1') and self.n_lanes >= 1:
-                self.current_lane = 1
-            elif key == ord('2') and self.n_lanes >= 2:
-                self.current_lane = 2
-            elif key == ord('3') and self.n_lanes >= 3:
-                self.current_lane = 3
-            elif key == ord('4') and self.n_lanes >= 4:
-                self.current_lane = 4
+            if ord('1') <= key <= ord('6'):
+                lane_id = key - ord('0')
+                if self.n_lanes >= lane_id:
+                    self.current_lane = lane_id
             elif key == ord('z'):
                 if self.lanes[self.current_lane]:
                     self.lanes[self.current_lane].pop()
@@ -394,7 +392,7 @@ def annotate(image: np.ndarray, n_lanes: int = 4,
 
     Args:
         image:     原图（任意分辨率，4K 也可）
-        n_lanes:   车道线数量上限（最多 4）
+        n_lanes:   车道线数量上限（最多 6）
         initial:   可选初始标注，用于编辑现有标定
         win_w:     窗口宽度（默认 1280）
         win_h:     窗口高度（默认 800）
@@ -421,7 +419,7 @@ def main():
     parser.add_argument("--initial", default=None,
                         help="Path to existing annotation JSON to load for editing")
     parser.add_argument("--n-lanes", type=int, default=4,
-                        help="Number of lanes (1-4, default 4)")
+                        help="Number of lanes (1-6, default 4)")
     args = parser.parse_args()
 
     img = cv2.imread(args.image)
@@ -430,7 +428,7 @@ def main():
         return
 
     print(f"Image size: {img.shape[1]}x{img.shape[0]}")
-    print("Controls: 1-4 switch lane | Wheel zoom | MBtn pan | Space+LBtn pan")
+    print("Controls: 1-6 switch lane | Wheel zoom | MBtn pan | Space+LBtn pan")
     print("          Z undo | C clear lane | R reset view | S save | Q quit")
 
     initial = None

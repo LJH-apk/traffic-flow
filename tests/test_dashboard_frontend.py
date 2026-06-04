@@ -25,3 +25,24 @@ def test_dashboard_frontend_uses_big_screen_layout_labels():
     assert "累计车辆" in html
     assert "最近过车事件" in html
     assert "车道流量" in html
+
+
+def test_dashboard_frontend_has_container_hud_not_detection_redraw():
+    html = INDEX.read_text(encoding="utf-8")
+
+    assert 'id="hudLayer"' in html
+    assert 'class="hud-top"' in html
+    assert 'id="hudFrameVal"' in html
+    assert 'id="hudProgressVal"' in html
+    assert "<canvas" not in html
+    assert "bbox-overlay" not in html
+    assert "drawBoundingBox" not in html
+
+
+def test_dashboard_frontend_has_metric_animation_and_event_highlight():
+    html = INDEX.read_text(encoding="utf-8")
+
+    assert "function animateNumber" in html
+    assert "function flashPanel" in html
+    assert "event--fresh" in html
+    assert "data-metric=" in html

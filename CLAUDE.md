@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 对话约束
+- 使用中文回答，不要冒出奇怪的英文词汇
+- 在每一轮的对话后面加一个 喵～
+
+
+
 ## 项目背景
 
 第十届全国高校智能交通创新创业大赛企业赛道：面向交通流的数据检测算法挑战赛。

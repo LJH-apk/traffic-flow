@@ -82,6 +82,44 @@ python3 run_dashboard.py
 
 ---
 
+## 人工复核验证
+
+`eval_on_video.py` 使用 `yolo26x` 做伪 GT，只能反映模型一致性。正式测试报告建议使用人工复核集验证：北进口、南进口、东进口各抽 5 分钟，人工记录每辆车通过断面线的帧号、方向、类别，并用脚本对 `outputs/cross_section.csv` 做事件匹配、车头时距复算、车头间距一致性检查和异常事件检查。
+
+人工过线标注 CSV 至少包含以下字段：
+
+```csv
+gt_frame_id,section,track_id,class_name,direction
+26,北进口主断面,1,car,到达
+75,北进口主断面,2,car,到达
+```
+
+运行验证：
+
+```bash
+python3 -u src/evaluation/manual_validation.py \
+  --cross-section outputs/cross_section.csv \
+  --manual-crossing annotations/manual_crossing_annotations.csv \
+  --output-dir outputs/validation \
+  --fps 25 \
+  --frame-tolerance 10
+```
+
+输出文件均保存在 `outputs/validation/`，可直接用于后续绘图：
+
+| 文件 | 内容 |
+|------|------|
+| `validation_summary.csv` | 事件 Precision/Recall、过线时间 MAE、方向/类别准确率、车头时距误差、异常数量 |
+| `event_matching_details.csv` | 每个预测/人工事件的 TP、FP、FN 明细和过线帧误差 |
+| `headway_details.csv` | 用人工过线帧复算的车头时距、算法时距、MAE/MAPE 明细 |
+| `spacing_consistency_details.csv` | `spacing_m ≈ previous_speed / 3.6 × headway_s` 的逐事件一致性明细 |
+| `anomaly_events.csv` | 重复过线、反向触发、超高速、过短时距、负间距等异常事件 |
+| `validation_log.json` | 输入路径、参数、生成文件、摘要指标和报告说明文本 |
+
+报告措辞建议：检测、跟踪、断面过车事件基于人工复核集计算精度；车速由单应矩阵标定后的轨迹位移计算，精度通过人工点选轨迹点和尺度校验间接验证；车头时距由相邻车辆过同一断面的时间差计算；车头间距为速度与车头时距推导值，不作为独立人工真值项。
+
+---
+
 ## 项目结构
 
 ```
@@ -107,6 +145,7 @@ src/
   evaluation/
     eval_on_video.py            # 伪 GT 精度评测（yolo26x 作 GT）
     eval_coco.py                # COCO val2017 标准评测
+    manual_validation.py        # 人工复核集验证 + 绘图明细导出
 tests/
   trajectory/
     test_traj_grouper.py        # TrajGrouper 单元测试（13 个）

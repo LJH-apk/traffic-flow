@@ -30,6 +30,7 @@ button{font:inherit}
 .side{display:grid;grid-template-rows:repeat(3,1fr);gap:12px;min-height:0}
 .panel{border:1px solid rgba(96,165,250,.28);background:linear-gradient(180deg,rgba(8,18,34,.88),rgba(5,11,22,.88));border-radius:8px;padding:14px;min-height:0;box-shadow:inset 0 0 18px rgba(15,23,42,.7),0 0 24px rgba(15,118,110,.08)}
 .panel h2{margin:0 0 12px;font-size:14px;color:#bfdbfe;font-weight:800}
+.panel.panel-flash{animation:panelPulse .62s ease-out}
 .metric{display:flex;align-items:baseline;gap:8px;margin-top:6px}
 .metric .num{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:42px;line-height:1;font-weight:900;color:#f8fafc;text-shadow:0 0 18px rgba(56,189,248,.28)}
 .metric .unit{font-size:13px;color:#7e99b1}
@@ -43,13 +44,22 @@ button{font:inherit}
 .empty{position:absolute;inset:42px 0 0;display:grid;place-items:center;color:#64748b;font-size:14px;pointer-events:none}
 .screen.has-live .empty{display:none}
 .corner{position:absolute;width:22px;height:22px;border-color:#22d3ee;opacity:.78}.tl{top:50px;left:8px;border-top:2px solid;border-left:2px solid}.tr{top:50px;right:8px;border-top:2px solid;border-right:2px solid}.bl{bottom:8px;left:8px;border-bottom:2px solid;border-left:2px solid}.br{bottom:8px;right:8px;border-bottom:2px solid;border-right:2px solid}
+.hud-layer{position:absolute;inset:42px 0 0;z-index:2;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:12px}
+.hud-top,.hud-bottom{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hud-pill{display:inline-flex;align-items:center;gap:8px;min-height:28px;padding:0 10px;border:1px solid rgba(34,211,238,.34);border-radius:6px;background:rgba(2,6,23,.60);color:#dffaff;font:800 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:0 0 16px rgba(14,165,233,.12)}
+.hud-pill i{width:7px;height:7px;border-radius:50%;background:#64748b;box-shadow:0 0 8px rgba(100,116,139,.8)}
+.running .hud-pill i{background:#22c55e;box-shadow:0 0 12px rgba(34,197,94,.9)}
+.hud-bottom{align-items:flex-end}.hud-progress{min-width:170px}.hud-progress .track{margin-top:7px}
 .bars{display:grid;gap:8px}.bar{display:grid;grid-template-columns:46px 1fr 38px;align-items:center;gap:8px;font-size:12px;color:#b6c7d8}.track{height:8px;background:#111827;border-radius:99px;overflow:hidden}.fill{height:100%;width:0;background:linear-gradient(90deg,#22d3ee,#34d399);border-radius:99px}
 .events{display:grid;gap:7px;overflow:hidden}.event{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px;border:1px solid rgba(148,163,184,.18);border-radius:6px;background:rgba(15,23,42,.68);font-size:12px}.event small{color:#8aa4ba}.event b{color:#e5edf8;font-weight:800}
+.event.event--fresh{animation:eventIn .52s ease-out;border-color:rgba(251,191,36,.62);background:rgba(69,48,12,.68)}
 .bottom{display:grid;grid-template-columns:360px 1fr 330px;gap:12px;min-height:0}
 .controls{display:flex;align-items:center;gap:10px}.btn{height:42px;border:1px solid rgba(148,163,184,.28);background:#101827;color:#e5edf8;border-radius:8px;padding:0 16px;font-weight:800;cursor:pointer}.btn.primary{border-color:rgba(45,212,191,.55);background:#0f766e}.btn.danger{border-color:rgba(244,63,94,.45);background:#881337}.btn:disabled{opacity:.45;cursor:not-allowed}
 .progress{height:8px;background:#111827;border-radius:99px;overflow:hidden;margin-top:12px}.progress span{display:block;width:0;height:100%;background:linear-gradient(90deg,#22d3ee,#fbbf24)}
 .wide-panel{border:1px solid rgba(96,165,250,.24);background:rgba(8,17,31,.84);border-radius:8px;padding:14px;min-width:0}
 .logline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8aa4ba;font-size:12px;margin-top:10px}
+@keyframes panelPulse{0%{box-shadow:0 0 0 rgba(251,191,36,0),inset 0 0 18px rgba(15,23,42,.7)}35%{box-shadow:0 0 26px rgba(251,191,36,.38),inset 0 0 18px rgba(251,191,36,.14)}100%{box-shadow:0 0 24px rgba(15,118,110,.08),inset 0 0 18px rgba(15,23,42,.7)}}
+@keyframes eventIn{0%{transform:translateY(9px);opacity:.45}100%{transform:translateY(0);opacity:1}}
 @media(max-width:980px){body{overflow:auto}.shell{height:auto;min-height:100vh;grid-template-rows:auto auto auto}.top,.main,.bottom{grid-template-columns:1fr}.side{grid-template-rows:none}.screen{height:58vh}.status{grid-template-columns:repeat(3,1fr)}}
 </style>
 </head>
@@ -70,8 +80,8 @@ button{font:inherit}
 
   <section class="main">
     <aside class="side">
-      <div class="panel accent-green"><h2>累计车辆</h2><div class="metric"><span class="num" id="vehiclesVal">0</span><span class="unit">辆</span></div></div>
-      <div class="panel accent-amber"><h2>实时均速</h2><div class="metric"><span class="num" id="speedVal">0.0</span><span class="unit">km/h</span></div></div>
+      <div class="panel accent-green" data-metric="vehicles"><h2>累计车辆</h2><div class="metric"><span class="num" id="vehiclesVal">0</span><span class="unit">辆</span></div></div>
+      <div class="panel accent-amber" data-metric="speed"><h2>实时均速</h2><div class="metric"><span class="num" id="speedVal">0.0</span><span class="unit">km/h</span></div></div>
       <div class="panel"><h2>车型分布</h2><div class="bars" id="classBars"></div></div>
     </aside>
 
@@ -82,12 +92,22 @@ button{font:inherit}
         <video id="replayVideo" src="/outputs/trajectory.mp4" controls preload="metadata"></video>
       </div>
       <div class="empty" id="emptyState">等待检测画面</div>
+      <div class="hud-layer" id="hudLayer">
+        <div class="hud-top">
+          <span class="hud-pill"><i></i><b>LIVE</b></span>
+          <span class="hud-pill">FPS <b id="hudFpsVal">0.0</b></span>
+        </div>
+        <div class="hud-bottom">
+          <span class="hud-pill">FRAME <b id="hudFrameVal">0</b></span>
+          <span class="hud-pill hud-progress">PROGRESS <b id="hudProgressVal">0%</b><span class="track"><span class="fill" id="hudProgressBar"></span></span></span>
+        </div>
+      </div>
       <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
     </section>
 
     <aside class="side">
-      <div class="panel accent-blue"><h2>过车事件</h2><div class="metric"><span class="num" id="eventsVal">0</span><span class="unit">次</span></div></div>
-      <div class="panel accent-rose"><h2>活跃目标</h2><div class="metric"><span class="num" id="activeVal">0</span><span class="unit">个</span></div></div>
+      <div class="panel accent-blue" data-metric="events"><h2>过车事件</h2><div class="metric"><span class="num" id="eventsVal">0</span><span class="unit">次</span></div></div>
+      <div class="panel accent-rose" data-metric="active"><h2>活跃目标</h2><div class="metric"><span class="num" id="activeVal">0</span><span class="unit">个</span></div></div>
       <div class="panel"><h2>车道流量</h2><div class="bars" id="laneBars"></div></div>
     </aside>
   </section>
@@ -114,7 +134,7 @@ button{font:inherit}
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { liveStarted: false, replay: false };
+const state = { liveStarted: false, replay: false, values: {}, prevStats: null };
 
 function fmtTime(s){
   const v = Number(s) || 0;
@@ -124,6 +144,31 @@ function fmtTime(s){
 }
 
 function setText(id, value){ $(id).textContent = value; }
+
+function animateNumber(id, target, digits = 0){
+  const el = $(id);
+  const next = Number(target) || 0;
+  const from = state.values[id] ?? next;
+  state.values[id] = next;
+  const start = performance.now();
+  const duration = 420;
+  function step(now){
+    const p = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - p, 3);
+    const cur = from + (next - from) * eased;
+    el.textContent = digits ? cur.toFixed(digits) : Math.round(cur).toLocaleString("zh-CN");
+    if(p < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function flashPanel(metric){
+  const panel = document.querySelector(`[data-metric="${metric}"]`);
+  if(!panel) return;
+  panel.classList.remove("panel-flash");
+  void panel.offsetWidth;
+  panel.classList.add("panel-flash");
+}
 
 function renderBars(id, data){
   const box = $(id);
@@ -135,12 +180,13 @@ function renderBars(id, data){
   }).join("") : '<div class="label">暂无数据</div>';
 }
 
-function renderEvents(events){
+function renderEvents(events, freshFirst = false){
   const box = $("eventsList");
-  box.innerHTML = (events || []).slice(0,4).map(ev => {
+  box.innerHTML = (events || []).slice(0,4).map((ev, idx) => {
     const title = `${ev.section || "断面"} · ${ev.direction || "方向"} · ${ev.class_name || "车辆"}`;
     const speed = Number(ev.speed_kmh || 0).toFixed(1) + " km/h";
-    return `<div class="event"><div><b>${title}</b><br><small>${fmtTime(ev.timestamp_s)} ${ev.plate || ""}</small></div><small>${speed}</small></div>`;
+    const cls = idx === 0 && freshFirst ? "event event--fresh" : "event";
+    return `<div class="${cls}"><div><b>${title}</b><br><small>${fmtTime(ev.timestamp_s)} ${ev.plate || ""}</small></div><small>${speed}</small></div>`;
   }).join("") || '<div class="label">暂无事件</div>';
 }
 
@@ -192,8 +238,12 @@ function applyStatus(snapshot){
   setText("runState", running ? (snapshot.stop_requested ? "停止中" : "运行中") : (snapshot.error ? "异常" : "待机"));
   setText("fpsVal", Number(snapshot.progress?.fps || 0).toFixed(1));
   setText("timeVal", fmtTime(snapshot.progress?.timestamp_s || 0));
+  setText("hudFpsVal", Number(snapshot.progress?.fps || 0).toFixed(1));
+  setText("hudFrameVal", snapshot.progress?.frame_idx || 0);
+  setText("hudProgressVal", Number(snapshot.progress?.percent || 0).toFixed(1) + "%");
   setText("videoName", snapshot.video || "固定检测视频");
   $("progressBar").style.width = Number(snapshot.progress?.percent || 0) + "%";
+  $("hudProgressBar").style.width = Number(snapshot.progress?.percent || 0) + "%";
   $("startBtn").disabled = running;
   $("stopBtn").disabled = !running;
   $("screen").classList.toggle("has-live", running || state.liveStarted || state.replay);
@@ -201,13 +251,20 @@ function applyStatus(snapshot){
 }
 
 function applyStats(stats){
-  setText("vehiclesVal", stats.vehicles || 0);
-  setText("eventsVal", stats.events || 0);
-  setText("speedVal", Number(stats.avg_speed || 0).toFixed(1));
-  setText("activeVal", stats.active_tracks || 0);
+  const prev = state.prevStats || {};
+  if(Number(stats.vehicles || 0) > Number(prev.vehicles || 0)) flashPanel("vehicles");
+  if(Number(stats.events || 0) > Number(prev.events || 0)) flashPanel("events");
+  if(Number(stats.active_tracks || 0) !== Number(prev.active_tracks || 0)) flashPanel("active");
+  if(Number(stats.avg_speed || 0).toFixed(1) !== Number(prev.avg_speed || 0).toFixed(1)) flashPanel("speed");
+
+  animateNumber("vehiclesVal", stats.vehicles || 0);
+  animateNumber("eventsVal", stats.events || 0);
+  animateNumber("speedVal", stats.avg_speed || 0, 1);
+  animateNumber("activeVal", stats.active_tracks || 0);
   renderBars("classBars", stats.class_counts);
   renderBars("laneBars", stats.lane_counts);
-  renderEvents(stats.recent_events);
+  renderEvents(stats.recent_events, Number(stats.events || 0) > Number(prev.events || 0));
+  state.prevStats = {...stats};
 }
 
 async function poll(){

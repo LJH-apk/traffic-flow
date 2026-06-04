@@ -1,0 +1,18 @@
+{
+  "image": "/Users/liujiahang/科研/交通流算法/calibrations/东进口/ref.jpg",
+  "stop_lines": [
+    {
+      "name": "东进口停车线",
+      "points": [
+        [
+          3342,
+          1410
+        ],
+        [
+          852,
+          1494
+        ]
+      ]
+    }
+  ]
+}

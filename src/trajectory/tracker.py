@@ -57,6 +57,7 @@ from src.cross_section.counter import CrossSectionDetector
 from src.cross_section.lane_detector import LaneDetector
 from src.cross_section.speed_estimator import SpeedEstimator
 from src.cross_section.lane_calibration import get_calibration
+from src.cross_section.section_calibration import load_all_section_lines, load_section_lines
 from src.trajectory.traj_grouper import TrajGrouper
 from src.utils.video_io import open_video, video_meta, make_writer, iter_frames, AsyncWriter
 from src.utils.visualization import draw_boxes, put_fps_text, put_text
@@ -69,17 +70,54 @@ _GRACE_FRAMES = 10                              # track消失后保留帧数，�
 _OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
 _LIVE_PREVIEW_FPS = 18.0                       # Web 实时预览发布帧率
 
+
+class _TrackerOutputLock:
+    """跨进程输出锁，避免 dashboard 和命令行同时写 outputs。"""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._fh = None
+
+    def __enter__(self):
+        import fcntl
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = self.path.open("w", encoding="utf-8")
+        try:
+            fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            self._fh.close()
+            self._fh = None
+            raise RuntimeError("已有检测任务正在写 outputs，请先停止 dashboard 检测或等待完成") from exc
+        self._fh.write(f"{time.time():.3f}\n")
+        self._fh.flush()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        import fcntl
+
+        if self._fh is None:
+            return
+        fcntl.flock(self._fh, fcntl.LOCK_UN)
+        self._fh.close()
+        self._fh = None
+
+    def __del__(self) -> None:
+        self.__exit__(None, None, None)
+
+
 def _resolve_section_lines(video_path) -> list:
-    """从视频文件名推断进口名，返回对应断面线列表；识别失败则返回全部断面线。"""
+    """从视频文件名推断进口名，优先返回手动标注 sections.json。"""
     stem = Path(video_path).stem
     for alias, canonical in ENTRANCE_ALIASES.items():
         if alias in stem:
-            lines = SECTION_LINES_MAP.get(canonical, [])
+            lines = load_section_lines(canonical)
             if lines:
                 print(f"[断面] 识别到进口：{canonical}，加载 {len(lines)} 条断面线")
                 return lines
-    print(f"[断面] 未识别进口名（文件：{Path(video_path).name}），加载全部 {len(SECTION_LINES)} 条断面线")
-    return SECTION_LINES
+    lines = load_all_section_lines() or SECTION_LINES
+    print(f"[断面] 未识别进口名（文件：{Path(video_path).name}），加载全部 {len(lines)} 条断面线")
+    return lines
 _TEST_VIDEO  = "北进口_20260420075959至20260420081500.mp4"
 
 # 车牌正则表达式匹配：省份简称 + 字母 + 5位字母/数字
@@ -95,6 +133,15 @@ _PLATE_BODY = re.compile(r"[A-Z][A-Z0-9]{5}$")
 _PLATE_CONF_THRESH = 0.85  # HyperLPR3 置信度阈值，低于此值的结果丢弃
 _VOTE_MIN = 3              # 至少累积多少次高置信结果才锁定
 _VOTE_MAX = 7              # 每辆车最多保留多少票（防止旧错误票污染）
+_PLATE_BODY_MIN_VOTES = 3
+_PLATE_BODY_MIN_RATIO = 0.50
+_PLATE_PROVINCE_MIN_VOTES = 2
+_PLATE_PROVINCE_MIN_RATIO = 0.60
+_PLATE_MIN_BOTTOM_RATIO = 0.55  # 车框底部进入画面下半部后，脱敏马赛克才更可能解除
+_PLATE_MIN_BOX_W = 160          # 过小车辆通常处于远处/低清晰度区域
+_PLATE_MIN_BOX_H = 110
+_PLATE_ROI_TOP_RATIO = 0.45     # 只在车辆下半部分找车牌，减少车身文字误识别
+_PLATE_VEHICLE_CLASSES = {"car", "bus", "truck"}
 
 
 def _rel_to_abs(
@@ -167,7 +214,17 @@ class PlateRecognizer:
         crop_w, crop_h = cx2 - cx1, cy2 - cy1
         if crop_w <= 0 or crop_h <= 0:
             return "", None
-        crop = frame[cy1:cy2, cx1:cx2]
+
+        if cy2 / fh < _PLATE_MIN_BOTTOM_RATIO:
+            return "", None
+        if crop_w < _PLATE_MIN_BOX_W or crop_h < _PLATE_MIN_BOX_H:
+            return "", None
+
+        roi_y1 = cy1 + int(crop_h * _PLATE_ROI_TOP_RATIO)
+        crop = frame[roi_y1:cy2, cx1:cx2]
+        roi_h = cy2 - roi_y1
+        if roi_h <= 0:
+            return "", None
 
         try:
             results = self._catcher(crop)
@@ -184,7 +241,12 @@ class PlateRecognizer:
             # item[3] 是车牌在 crop 内的绝对像素坐标，转为相对比例存储，
             # 使得后续每帧可根据当前 bbox 还原绝对坐标，车牌框跟随车辆移动。
             px1, py1, px2, py2 = item[3]
-            rel_box = (px1 / crop_w, py1 / crop_h, px2 / crop_w, py2 / crop_h)
+            rel_box = (
+                px1 / crop_w,
+                (roi_y1 - cy1 + py1) / crop_h,
+                px2 / crop_w,
+                (roi_y1 - cy1 + py2) / crop_h,
+            )
 
             votes = self._pending.setdefault(track_id, [])
             votes.append((plate, conf, rel_box))
@@ -193,29 +255,64 @@ class PlateRecognizer:
 
         votes = self._pending.get(track_id, [])
         if len(votes) >= _VOTE_MIN:
-            result = self._tally(votes)
-            self._cache[track_id] = result
-            del self._pending[track_id]
-            return result
+            result, stable = self._tally(votes)
+            if stable or len(votes) >= _VOTE_MAX:
+                self._cache[track_id] = result
+                del self._pending[track_id]
+                return result
 
         return "", None
 
     @staticmethod
     def _tally(
         votes: list[tuple[str, float, tuple[float, float, float, float] | None]],
-    ) -> tuple[str, tuple[float, float, float, float] | None]:
-        """对多帧投票结果取多数，省份字符与车牌主体分别投票。"""
+    ) -> tuple[tuple[str, tuple[float, float, float, float] | None], bool]:
+        """对多帧投票结果取多数，省份字符与车牌主体分别投票。
+
+        主体稳定即可输出；省份字更容易误识别，必须满足更严格的一致性。
+        返回值第二项表示省份和主体是否都已稳定，可安全锁定完整车牌。
+        """
         from collections import Counter
 
-        provinces = [v[0][0] for v in votes if v[0] and v[0][0] in _PROVINCE]
-        bodies    = [v[0][1:] for v in votes if len(v[0]) > 1]
+        provinces: list[str] = []
+        bodies: list[str] = []
+        for plate, _, _ in votes:
+            province, body = PlateRecognizer._split_plate(plate)
+            if province:
+                provinces.append(province)
+            if body:
+                bodies.append(body)
 
-        province = Counter(provinces).most_common(1)[0][0] if provinces else ""
-        body     = Counter(bodies).most_common(1)[0][0]    if bodies    else ""
+        body = ""
+        body_stable = False
+        if bodies:
+            body, body_votes = Counter(bodies).most_common(1)[0]
+            body_stable = (
+                body_votes >= _PLATE_BODY_MIN_VOTES
+                and body_votes / len(bodies) >= _PLATE_BODY_MIN_RATIO
+            )
 
-        plate   = province + body if province else body
+        province = ""
+        province_stable = False
+        if provinces:
+            province, province_votes = Counter(provinces).most_common(1)[0]
+            province_stable = (
+                province_votes >= _PLATE_PROVINCE_MIN_VOTES
+                and province_votes / len(provinces) >= _PLATE_PROVINCE_MIN_RATIO
+            )
+
+        plate = (province + body) if (province_stable and body) else body
         rel_box = max(votes, key=lambda v: v[1])[2]  # 取置信度最高的 box
-        return (plate, rel_box)
+        return (plate, rel_box), (body_stable and province_stable)
+
+    @staticmethod
+    def _split_plate(plate: str) -> tuple[str, str]:
+        """拆分为省份字符和 6 位主体，兼容缺省份的降级结果。"""
+        if len(plate) >= 7 and plate[0] in _PROVINCE:
+            return plate[0], plate[1:7]
+        if len(plate) >= 6:
+            return "", plate[-6:]
+        return "", ""
 
     @staticmethod
     def _match_plate(text: str) -> str:
@@ -350,6 +447,40 @@ class TrajectoryTracker:
                 return i + 1
         return None
 
+    @staticmethod
+    def _rewrite_dict_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
+        """用内存中的规范记录重写 CSV，避免并发/残留行污染最终文件。"""
+        with Path(path).open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({field: row.get(field, "") for field in fields})
+
+    @staticmethod
+    def _backfill_plates(
+        traj_records: list[dict],
+        cross_events: list[dict],
+        plate_cache: dict[int, tuple[str, tuple[float, float, float, float] | None]],
+    ) -> int:
+        """按 track_id 将后续识别到的车牌回填到轨迹和断面事件。"""
+        plate_by_tid = {
+            int(tid): plate
+            for tid, (plate, _) in plate_cache.items()
+            if plate
+        }
+        filled = 0
+        for rows in (traj_records, cross_events):
+            for row in rows:
+                try:
+                    tid = int(row.get("track_id"))
+                except (TypeError, ValueError):
+                    continue
+                plate = plate_by_tid.get(tid)
+                if plate and not row.get("plate"):
+                    row["plate"] = plate
+                    filled += 1
+        return filled
+
     def run(
         self,
         video_path: str | Path = _TEST_VIDEO,
@@ -376,6 +507,7 @@ class TrajectoryTracker:
         Returns:
             写出的 CSV 文件路径。
         """
+        _output_lock = _TrackerOutputLock(OUTPUT_DIR / ".tracker.lock").__enter__()
         cap  = open_video(video_path)
         meta = video_meta(cap)
 
@@ -540,7 +672,9 @@ class TrajectoryTracker:
                         _live_class_counts[label] = _live_class_counts.get(label, 0) + 1
 
                         # 每帧：对未锁定车辆积累投票，锁定后不再调用 HyperLPR3
-                        if tid is not None and tid not in self._plate_rec._cache:
+                        if (tid is not None
+                                and label in _PLATE_VEHICLE_CLASSES
+                                and tid not in self._plate_rec._cache):
                             self._plate_rec.recognize(frame, tid, (x1, y1, x2, y2))
 
                         # 每帧：从缓存取已确认车牌，用当前 bbox 还原绝对坐标
@@ -795,8 +929,6 @@ class TrajectoryTracker:
         stats_fh.close()
         print(f"[Stats] vehicle_stats.csv: {stats_path}")
 
-        _grouper.finalize()
-
         cap.release()
         writer.release()
         cross_f.close()
@@ -827,10 +959,22 @@ class TrajectoryTracker:
         print(f"跟踪车辆总数    : {unique_tids} 辆（唯一 track_id）")
         print(f"断面过车合计    : 机动车 {total_motor} 辆  /  非机动车 {total_nonmotor} 辆")
 
+        filled_plates = self._backfill_plates(
+            _all_traj_records,
+            _all_cross_events,
+            self._plate_rec._cache,
+        )
+        self._rewrite_dict_csv(csv_path, self._CSV_FIELDS, _all_traj_records)
+        self._rewrite_dict_csv(cross_path, self._CROSS_CSV_FIELDS, _all_cross_events)
+        if filled_plates:
+            print(f"[Plate] 已按 track_id 回填车牌 {filled_plates} 处，并重写 CSV")
+
         self._export_excel(
             _all_traj_records, _all_cross_events,
             self._CSV_FIELDS, self._CROSS_CSV_FIELDS,
         )
+        _grouper.finalize()
+        _output_lock.__exit__(None, None, None)
         return csv_path
 
     def _export_excel(
@@ -876,6 +1020,42 @@ class TrajectoryTracker:
         def _headers(fields: list[str]) -> list[str]:
             return [_CN.get(f, f) for f in fields]
 
+        def _valid_lane_id(value) -> bool:
+            """Excel 每车道统计只应使用已归属到标注车道的轨迹点。"""
+            if value is None or value == "":
+                return False
+            try:
+                return not np.isnan(value)
+            except TypeError:
+                return True
+
+        def _bbox_iou(a: dict, b: dict) -> float:
+            ax1, ay1, ax2, ay2 = (float(a.get(k, 0) or 0) for k in ("x1", "y1", "x2", "y2"))
+            bx1, by1, bx2, by2 = (float(b.get(k, 0) or 0) for k in ("x1", "y1", "x2", "y2"))
+            ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+            ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+            iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+            inter = iw * ih
+            area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+            area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+            denom = area_a + area_b - inter
+            return inter / denom if denom > 0 else 0.0
+
+        def _center_dist(a: dict, b: dict) -> float:
+            return float(np.hypot(
+                float(a.get("cx", 0) or 0) - float(b.get("cx", 0) or 0),
+                float(a.get("cy", 0) or 0) - float(b.get("cy", 0) or 0),
+            ))
+
+        def _dedupe_snapshot(records: list[dict]) -> list[dict]:
+            """去掉同一快照内由 ID 跳变/类别抖动造成的重复车辆。"""
+            kept: list[dict] = []
+            for rec in sorted(records, key=lambda r: VEHICLE_LENGTHS_M.get(r.get("class_name", "car"), 4.5)):
+                if any(_bbox_iou(rec, old) >= 0.85 or _center_dist(rec, old) <= 5.0 for old in kept):
+                    continue
+                kept.append(rec)
+            return kept
+
         wb = openpyxl.Workbook()
 
         # ── Sheet1: 断面过车 ─────────────────────────────────────────────────
@@ -903,20 +1083,35 @@ class TrajectoryTracker:
 
         # ── Sheet4: 空间占有率（每5秒 × 每车道）────────────────────────────
         ws4 = wb.create_sheet("空间占有率")
-        ws4.append(["时间戳(秒)", "车道编号", "在场车辆数", "占用总长度(米)", "空间占有率(%)"])
-        # (5s窗口, lane_id) -> {tid: class_name}
-        occ_bucket: dict[tuple, dict] = defaultdict(dict)
+        ws4.append([
+            "统计起始(秒)", "统计结束(秒)", "车道编号",
+            "平均在场车辆数", "平均占用总长度(米)", "平均空间占有率(%)",
+        ])
+        # 先按每秒快照统计，再对 5 秒窗口求平均；不能把 5 秒内出现过的 track_id 做并集。
+        occ_snapshot: dict[tuple, list] = defaultdict(list)
         for rec in traj_records:
-            win = int(float(rec.get("timestamp_s", 0)) // 5)
             lane = rec.get("lane_id", "")
-            occ_bucket[(win, lane)][rec.get("track_id")] = rec.get("class_name", "car")
-        for (win, lane) in sorted(occ_bucket.keys(), key=lambda t: (t[0], str(t[1]))):
-            tid_cls = occ_bucket[(win, lane)]
-            total_len = sum(VEHICLE_LENGTHS_M.get(c, 4.5) for c in tid_cls.values())
-            occ_pct = round(min(100.0, total_len / SECTION_ROAD_LENGTH_M * 100), 1)
-            ws4.append([win * 5, lane if lane != "" else "未知", len(tid_cls), round(total_len, 1), occ_pct])
+            if not _valid_lane_id(lane):
+                continue
+            ts = int(float(rec.get("timestamp_s", 0)))
+            occ_snapshot[(ts, lane)].append(rec)
 
-        # ── Sheet5: 排队长度（每5秒 × 每车道，仅机动车）
+        occ_window: dict[tuple, list] = defaultdict(list)
+        for (ts, lane), records in occ_snapshot.items():
+            deduped = _dedupe_snapshot(records)
+            total_len = sum(VEHICLE_LENGTHS_M.get(r.get("class_name", "car"), 4.5) for r in deduped)
+            occ_pct = round(min(100.0, total_len / SECTION_ROAD_LENGTH_M * 100), 1)
+            occ_window[(ts // 5, lane)].append((len(deduped), total_len, occ_pct))
+
+        for (win, lane) in sorted(occ_window.keys(), key=lambda t: (t[0], str(t[1]))):
+            samples = occ_window[(win, lane)]
+            n_samples = len(samples)
+            avg_count = round(sum(v[0] for v in samples) / n_samples, 1)
+            avg_len = round(sum(v[1] for v in samples) / n_samples, 1)
+            avg_occ = round(sum(v[2] for v in samples) / n_samples, 1)
+            ws4.append([win * 5, (win + 1) * 5, lane, avg_count, avg_len, avg_occ])
+
+        # ── Sheet5: 排队长度（每秒 × 机动车道，仅机动车）
         # 排队判定：speed ≤ QUEUE_SPEED_THRESH_KMH
         # 排队长度(米) = Σ各车车身长度 + (n-1) × QUEUE_GAP_M
         _MOTOR_CLASSES = {"car", "bus", "truck"}
@@ -925,28 +1120,33 @@ class TrajectoryTracker:
             "统计起始(秒)", "统计结束(秒)", "车道编号",
             "排队车辆数", "排队长度(米)", "平均排队车速(km/h)",
         ])
-        # (5秒窗口, lane_id) -> {tid: (speed, class_name)}
-        queue_bucket: dict[tuple, dict] = defaultdict(dict)
+        # (秒, lane_id) -> list[rec]；同一秒内先做空间去重，避免 ID 跳变重复计数。
+        queue_bucket: dict[tuple, list] = defaultdict(list)
         for rec in traj_records:
             if rec.get("class_name") not in _MOTOR_CLASSES:
+                continue
+            if rec.get("lane_type") != "motor":
                 continue
             spd_raw = rec.get("speed_kmh")
             if spd_raw is None or spd_raw == "":
                 continue
             spd = float(spd_raw)
             if 0.0 <= spd <= QUEUE_SPEED_THRESH_KMH:
-                win  = int(float(rec.get("timestamp_s", 0)) // 5)
                 lane = rec.get("lane_id", "")
-                queue_bucket[(win, lane)][rec.get("track_id")] = (spd, rec.get("class_name", "car"))
-        for (win, lane) in sorted(queue_bucket.keys(), key=lambda t: (t[0], str(t[1]))):
-            tid_info = queue_bucket[(win, lane)]
-            n = len(tid_info)
-            avg_spd    = round(sum(v[0] for v in tid_info.values()) / n, 1)
-            total_body = sum(VEHICLE_LENGTHS_M.get(v[1], 4.5) for v in tid_info.values())
+                if not _valid_lane_id(lane):
+                    continue
+                ts = int(float(rec.get("timestamp_s", 0)))
+                queue_bucket[(ts, lane)].append(rec)
+
+        for (ts, lane) in sorted(queue_bucket.keys(), key=lambda t: (t[0], str(t[1]))):
+            records = _dedupe_snapshot(queue_bucket[(ts, lane)])
+            n = len(records)
+            avg_spd = round(sum(float(r.get("speed_kmh", 0) or 0) for r in records) / n, 1)
+            total_body = sum(VEHICLE_LENGTHS_M.get(r.get("class_name", "car"), 4.5) for r in records)
             queue_len  = round(total_body + max(0, n - 1) * QUEUE_GAP_M, 1)
             ws5.append([
-                win * 5, (win + 1) * 5,
-                lane if lane != "" else "未知",
+                ts, ts + 1,
+                lane,
                 n, queue_len, avg_spd,
             ])
 
