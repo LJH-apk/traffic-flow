@@ -83,10 +83,11 @@ class CrossSectionDetector:
 
     CSV_FIELDS = [
         "frame_id", "timestamp_s", "section", "arrival_departure", "track_id", "plate",
-        "class_name", "vehicle_category", "color", "direction", "speed_kmh", "headway_s", "spacing_m",
+        "class_name", "lane_id", "vehicle_category", "color", "direction", "speed_kmh", "headway_s", "spacing_m",
     ]
 
     _NON_MOTOR = {"motorcycle", "bicycle"}
+    _TURN_SECTION_KEYWORDS = ("右转", "左转", "掉头", "转弯", "待转")
 
     def __init__(
         self,
@@ -95,18 +96,22 @@ class CrossSectionDetector:
         pixels_per_meter: float,
         video_fps: float,
         speed_estimator: "SpeedEstimator | None" = None,
+        cooldown_frames: int = 0,
     ) -> None:
         self._lines = lines
         self._H = homography
         self._ppm = pixels_per_meter
         self._fps = video_fps
         self._speed_estimator = speed_estimator
+        self._cooldown_frames = max(0, int(cooldown_frames))
 
         # track_id -> deque of (frame_idx, wx, wy)，保留最近15帧用于速度估算
         self._history: dict[int, deque] = defaultdict(lambda: deque(maxlen=15))
 
         # (track_id, line_name) -> 上一帧叉积符号 (-1/0/+1)
         self._prev_sign: dict[tuple[int, str], int] = {}
+        self._last_event_frame: dict[tuple[int, str], int] = {}
+        self._armed_turn_events: set[tuple[int, str]] = set()
 
         # line_name -> {direction: (timestamp_s, speed_kmh, wx)} 上一辆过线车
         self._last_crossing: dict[str, dict[str, tuple[float, float, float]]] = (
@@ -158,12 +163,18 @@ class CrossSectionDetector:
             return -1
         return 0
 
+    @classmethod
+    def _is_turn_section(cls, section_name: str) -> bool:
+        name = str(section_name or "")
+        return any(keyword in name for keyword in cls._TURN_SECTION_KEYWORDS)
+
     def update(
         self,
         frame_idx: int,
         timestamp_s: float,
         tid: int,
         class_name: str,
+        lane_id: int | str | None,
         frame: np.ndarray,
         x1: int, y1: int, x2: int, y2: int,
     ) -> list[dict]:
@@ -201,8 +212,25 @@ class CrossSectionDetector:
 
             # 符号翻转 → 过线事件
             if prev != 0 and sign != 0 and prev != sign:
+                last_event_frame = self._last_event_frame.get(key)
+                if (
+                    last_event_frame is not None
+                    and frame_idx - last_event_frame <= self._cooldown_frames
+                ):
+                    continue
+                self._last_event_frame[key] = frame_idx
+
                 # sign 由正变负：车辆从正侧穿越到负侧，对应 dir_pos
                 direction = dir_pos if sign < 0 else dir_neg
+
+                # 待转/转弯类断面只统计一次触发，不记录车辆在待转区内
+                # 调整位置造成的回摆二次过线。
+                if self._is_turn_section(name):
+                    armed_key = (tid, name)
+                    if armed_key in self._armed_turn_events:
+                        continue
+                    self._armed_turn_events.add(armed_key)
+
                 speed = self._estimate_speed(tid)
                 color = detect_color(frame, x1, y1, x2, y2)
 
@@ -237,6 +265,7 @@ class CrossSectionDetector:
                     "arrival_departure": arrival_departure,
                     "track_id":          tid,
                     "class_name":        class_name,
+                    "lane_id":           lane_id if lane_id is not None else "",
                     "vehicle_category":  vehicle_category,
                     "color":             color,
                     "direction":         direction,

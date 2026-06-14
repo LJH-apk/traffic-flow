@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from src.evaluation.manual_validation import validate_outputs
+from src.evaluation.manual_validation import export_normalized_manual_annotations, validate_outputs
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
@@ -69,11 +69,14 @@ def test_validation_exports_plot_ready_details_and_log(tmp_path):
         frame_tolerance=10,
     )
 
-    assert summary["event_precision"] == pytest.approx(0.5)
+    assert summary["event_precision"] == pytest.approx(2 / 3)
     assert summary["event_recall"] == pytest.approx(1.0)
-    assert summary["duplicate_event_count"] == 1
+    assert summary["duplicate_event_count"] == 0
     assert summary["physical_anomaly_count"] == 3
     assert summary["headway_mae_s"] == pytest.approx(0.04)
+    assert summary["pred_dedup_count"] == 3
+    assert summary["manual_in_scope_count"] == 2
+    assert summary["overlap_max_frame"] == 75
 
     expected_files = {
         "validation_summary.csv",
@@ -81,14 +84,18 @@ def test_validation_exports_plot_ready_details_and_log(tmp_path):
         "headway_details.csv",
         "spacing_consistency_details.csv",
         "anomaly_events.csv",
+        "metric_breakdown.csv",
+        "section_class_breakdown.csv",
+        "section_lane_breakdown.csv",
         "validation_log.json",
     }
     assert expected_files.issubset({p.name for p in output_dir.iterdir()})
 
     matching = _read_csv(output_dir / "event_matching_details.csv")
     assert [row["match_status"] for row in matching].count("TP") == 2
-    assert [row["match_status"] for row in matching].count("FP") == 2
+    assert [row["match_status"] for row in matching].count("FP") == 1
     assert matching[0]["frame_error_s"] == "0.04"
+    assert matching[0]["lane_id"] == ""
 
     spacing = _read_csv(output_dir / "spacing_consistency_details.csv")
     row = next(r for r in spacing if r["track_id"] == "2")
@@ -98,10 +105,39 @@ def test_validation_exports_plot_ready_details_and_log(tmp_path):
 
     anomalies = _read_csv(output_dir / "anomaly_events.csv")
     assert {row["anomaly_type"] for row in anomalies} == {
-        "duplicate_event", "speed_out_of_range", "headway_too_short", "negative_spacing",
+        "speed_out_of_range", "headway_too_short", "negative_spacing",
     }
 
     log = json.loads((output_dir / "validation_log.json").read_text(encoding="utf-8"))
     assert log["fps"] == 25.0
     assert "event_matching_details.csv" in log["generated_files"]
+    assert "metric_breakdown.csv" in log["generated_files"]
     assert log["manual_crossing_csv"] == str(manual_csv)
+
+
+def test_export_normalized_manual_annotations_handles_xlsx_aliases(tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+
+    manual_xlsx = tmp_path / "manual.xlsx"
+    normalized_csv = tmp_path / "manual_crossing.csv"
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "manual_crossing"
+    ws.append(["entrance", "video_name", 0, "主", "到达", "car", "L2", "NC001", "小汽车", None])
+    ws.append(["北进口", "北进口_20260420075959至20260420081500.mp4", 108, "右", "到达", "BUS", "L1", "NB001", "公交车", None])
+    ws.append(["北进口", "北进口_20260420075959至20260420081500.mp5", 188, "北进口右转专用道", "到达", "YRU", "L1", "NT001", "货运皮卡", None])
+    ws.append([None, None, "frame_id", "section_name", "direction", "class_name", "lane_id", "manual_vehicle_id", "note", None])
+    wb.save(manual_xlsx)
+
+    events = export_normalized_manual_annotations(manual_xlsx, normalized_csv)
+
+    assert len(events) == 2
+    assert events[0]["section"] == "北进口右转"
+    assert events[0]["class_name"] == "bus"
+    assert events[1]["section"] == "北进口右转"
+    assert events[1]["class_name"] == "truck"
+
+    rows = _read_csv(normalized_csv)
+    assert len(rows) == 2
+    assert rows[0]["track_id"] == "NB001"

@@ -11,7 +11,7 @@ OUTPUT_DIR  = _ROOT / "outputs"                             # 所有生成文件
 MODEL_DIR   = _ROOT                                         # .pt 权重所在目录（暂留根目录）
 
 # ── 模型 ──────────────────────────────────────────────────────────────────────
-MODEL_NAME      = "yolo26n.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
+MODEL_NAME      = "yolo26m.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
 MODEL_NAME_GT   = "yolo26x.pt"  # 伪GT生成器（eval 用）
 DEVICE          = "mps"          # 推理设备：mps / cpu / cuda
 
@@ -54,7 +54,7 @@ TRAJ_CSV_PATH   = OUTPUT_DIR / "trajectory.csv"  # 轨迹输出文件
 SECTION_LINES_MAP: dict[str, list[tuple[str, int, int, int, int, str, str]]] = {
     "北进口": [
         # H 矩阵精确标定，15m 由单应矩阵计算
-        ("北进口主断面", 1497, 551,  2190, 534,  "到达", "离去"),
+        ("北进口主断面", 1497, 551,  2190, 534,  "离去", "到达"),
         ("北进口右转",   2493, 731,  2781, 929,  "右转", "直行"),
     ],
     "南进口": [
@@ -86,6 +86,7 @@ HOMOGRAPHY_MATRIX: np.ndarray | None = None
 PIXELS_PER_METER: float = 85.0
 
 CROSS_SECTION_CSV_PATH = OUTPUT_DIR / "cross_section.csv"
+CROSS_EVENT_COOLDOWN_FRAMES = 25  # 同一 track 同一断面短时间重复翻转视为抖动
 
 # ── 车道标定 ──────────────────────────────────────────────────────────────────
 CALIBRATIONS_DIR = _ROOT / "calibrations"
