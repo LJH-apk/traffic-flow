@@ -84,6 +84,7 @@ class CrossSectionDetector:
     CSV_FIELDS = [
         "frame_id", "timestamp_s", "section", "arrival_departure", "track_id", "plate",
         "class_name", "lane_id", "vehicle_category", "color", "direction", "speed_kmh", "headway_s", "spacing_m",
+        "cross_t", "lane_rule",
     ]
 
     _NON_MOTOR = {"motorcycle", "bicycle"}
@@ -110,6 +111,12 @@ class CrossSectionDetector:
 
         # (track_id, line_name) -> 上一帧叉积符号 (-1/0/+1)
         self._prev_sign: dict[tuple[int, str], int] = {}
+        # track_id -> 最近帧的 bbox 中心 y 历史 [(frame_idx, cy), ...]
+        self._y_history: dict[int, list[tuple[int, float]]] = defaultdict(list)
+        # (track_id, line_name) -> 最近帧的叉积历史 [(frame_idx, sign), ...]
+        self._sign_history: dict[tuple[int, str], list[tuple[int, int]]] = defaultdict(list)
+        # (track_id, line_name) -> 上一帧锚点 (cx, cy)，用于轨迹线段求交点
+        self._prev_anchor: dict[tuple[int, str], tuple[float, float]] = {}
         self._last_event_frame: dict[tuple[int, str], int] = {}
         self._armed_turn_events: set[tuple[int, str]] = set()
 
@@ -163,6 +170,42 @@ class CrossSectionDetector:
             return -1
         return 0
 
+    @staticmethod
+    def _segment_intersection(
+        ax: float, ay: float, bx: float, by: float,
+        cx: float, cy: float, dx: float, dy: float,
+    ) -> tuple[float, float, float]:
+        """求线段 AB 与线段 CD 的交点及在 CD 上的参数 t。
+
+        若平行或交点在 AB 外，退回 B 到 CD 的最近点投影。
+        返回 (ix, iy, t)，t ∈ [0,1] 为在 CD 上的归一化位置。
+        """
+        vx, vy = dx - cx, dy - cy  # CD 方向
+        denom = (bx - ax) * vy - (by - ay) * vx
+        eps = 1e-9
+        if abs(denom) < eps:
+            # 平行，退回 bbox 当前点投影
+            denom2 = vx * vx + vy * vy
+            t = max(0.0, min(1.0, ((bx - cx) * vx + (by - cy) * vy) / denom2)) if denom2 > eps else 0.0
+            return cx + t * vx, cy + t * vy, t
+        # 交点参数
+        s = ((cx - ax) * vy - (cy - ay) * vx) / denom
+        t_ab = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / denom
+        # 如果交点在 AB 内，用交点；否则退回投影
+        if 0.0 <= s <= 1.0:
+            ix = ax + s * (bx - ax)
+            iy = ay + s * (by - ay)
+        else:
+            # 退回 bx 点（当前 bbox）投影到 CD
+            denom2 = vx * vx + vy * vy
+            t_ab = max(0.0, min(1.0, ((bx - cx) * vx + (by - cy) * vy) / denom2)) if denom2 > eps else 0.0
+            ix = cx + t_ab * vx
+            iy = cy + t_ab * vy
+        # 计算在 CD 上的 t
+        denom_t = vx * vx + vy * vy
+        t = max(0.0, min(1.0, ((ix - cx) * vx + (iy - cy) * vy) / denom_t)) if denom_t > eps else 0.0
+        return ix, iy, t
+
     @classmethod
     def _is_turn_section(cls, section_name: str) -> bool:
         name = str(section_name or "")
@@ -194,6 +237,12 @@ class CrossSectionDetector:
         cx = (x1 + x2) / 2.0
         cy = (y1 + y2) / 2.0
 
+        # 记录 bbox 中心 y 历史（供方向趋势判定）
+        yhist = self._y_history[tid]
+        yhist.append((frame_idx, cy))
+        while yhist and frame_idx - yhist[0][0] > 30:
+            yhist.pop(0)
+
         # 更新世界坐标历史（供速度估算）
         wx, wy = self._to_world(cx, cy)
         self._history[tid].append((frame_idx, wx, wy))
@@ -209,6 +258,15 @@ class CrossSectionDetector:
             # 仅在符号非零时更新（避免静止压线时状态混乱）
             if sign != 0:
                 self._prev_sign[key] = sign
+                hist = self._sign_history[key]
+                hist.append((frame_idx, sign))
+                while hist and frame_idx - hist[0][0] > 30:
+                    hist.pop(0)
+
+            # 保存当前锚点（用于下一帧的轨迹线段求交）
+            prev_anchor = self._prev_anchor.get(key, (cx, cy))
+            if sign != 0:
+                self._prev_anchor[key] = (cx, cy)
 
             # 符号翻转 → 过线事件
             if prev != 0 and sign != 0 and prev != sign:
@@ -220,8 +278,21 @@ class CrossSectionDetector:
                     continue
                 self._last_event_frame[key] = frame_idx
 
-                # sign 由正变负：车辆从正侧穿越到负侧，对应 dir_pos
-                direction = dir_pos if sign < 0 else dir_neg
+                # 方向判定：用 bbox 中心 y 趋势（y↑=到达, y↓=离去）
+                # 比叉积瞬时方向更稳定，不受 bbox 抖动影响
+                yhist = self._y_history.get(tid, [])
+                if len(yhist) >= 5:
+                    y_first = yhist[0][1]
+                    y_last = yhist[-1][1]
+                    dy = y_last - y_first
+                    if dy > 10:
+                        direction = "到达"     # y 增大 = 向下移动 = 驶向画面下方
+                    elif dy < -10:
+                        direction = "离去"     # y 减小 = 向上移动 = 驶向画面上方
+                    else:
+                        direction = dir_pos if sign < 0 else dir_neg
+                else:
+                    direction = dir_pos if sign < 0 else dir_neg
 
                 # 待转/转弯类断面只统计一次触发，不记录车辆在待转区内
                 # 调整位置造成的回摆二次过线。
@@ -230,6 +301,15 @@ class CrossSectionDetector:
                     if armed_key in self._armed_turn_events:
                         continue
                     self._armed_turn_events.add(armed_key)
+
+                # ── 轨迹线段与断面线交点 ──────────────────────────
+                # 用于后续车道判定，比 bbox 投影更精确
+                px_prev, py_prev = prev_anchor
+                px_curr, py_curr = cx, cy
+                ix, iy, cross_t = self._segment_intersection(
+                    px_prev, py_prev, px_curr, py_curr,
+                    float(lx1), float(ly1), float(lx2), float(ly2),
+                )
 
                 speed = self._estimate_speed(tid)
                 color = detect_color(frame, x1, y1, x2, y2)
@@ -272,6 +352,7 @@ class CrossSectionDetector:
                     "speed_kmh":         speed,
                     "headway_s":         headway_s,
                     "spacing_m":         spacing_m,
+                    "cross_t":           round(cross_t, 4),
                 })
 
         return events

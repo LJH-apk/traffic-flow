@@ -371,6 +371,7 @@ class TrajectoryTracker:
         self._model     = YOLO(str(self.model_path))
         self._model.to(device)
         self._plate_rec = PlateRecognizer()
+        self._bbox_smooth: dict[int, tuple[int, int, int, int]] = {}
         print(f"[Tracker] 模型: {self.model_path.name}  设备: {device}")
 
     @staticmethod
@@ -448,31 +449,22 @@ class TrajectoryTracker:
             return None
 
         xs_by_lid = {lid: x for lid, x in xs_at_cy}
-        ordered_lids = sorted(xs_by_lid)
-        for left_lid, right_lid in zip(ordered_lids, ordered_lids[1:]):
-            x1 = xs_by_lid[left_lid]
-            x2 = xs_by_lid[right_lid]
-            if min(x1, x2) <= cx <= max(x1, x2):
+        # 按 x 降序: L1(x最大/对向侧) → L5(x最小/路缘侧)
+        sorted_by_x = sorted(xs_by_lid.items(), key=lambda kv: kv[1], reverse=True)
+        for i in range(len(sorted_by_x) - 1):
+            left_lid, left_x = sorted_by_x[i]       # x较大(靠对向)
+            right_lid, right_x = sorted_by_x[i + 1]  # x较小(靠路缘)
+            if right_x <= cx <= left_x:
+                # 车道编号: L1-L2=Lane1(靠中央), ..., L4-L5=Lane4(靠路缘)
                 return min(left_lid, right_lid)
 
-        first_lid = ordered_lids[0]
-        last_lid = ordered_lids[-1]
-        first_x = xs_by_lid[first_lid]
-        last_x = xs_by_lid[last_lid]
-
-        # 当前北进口标定线编号为“从对向侧到路缘侧”：
-        # 线 1 在右、线号递增后逐渐向左。线 1 右侧视为对向车道，
-        # 最左外侧（L5 外侧）不计入有效车道。
-        if first_x > last_x:
-            if cx > first_x:
-                return "OPPOSITE"
-            if cx < last_x:
-                return None
-        else:
-            if cx < first_x:
-                return "OPPOSITE"
-            if cx > last_x:
-                return None
+        # 落在所有线之外：最外侧(L1以右)=OPPOSITE，最内侧(L5以左)=None
+        first_lid, first_x = sorted_by_x[0]   # x最大(最靠对向)
+        last_lid, last_x = sorted_by_x[-1]    # x最小(最靠路缘)
+        if cx > first_x:
+            return "OPPOSITE"
+        if cx < last_x:
+            return None
         return None
 
     @staticmethod
@@ -538,86 +530,82 @@ class TrajectoryTracker:
         return xs_by_lid
 
     @staticmethod
+    def _compute_lane_boundary_cross_t(
+        section_line: tuple,
+        lane_splines: dict[int, tuple[float, float, object]],
+    ) -> dict[int, float]:
+        """预计算每条车道线与断面线的交点 t 值（车道分界阈值）。"""
+        _, lx1, ly1, lx2, ly2, _, _ = section_line
+        boundaries: dict[int, float] = {}
+        y_mid = (ly1 + ly2) / 2.0
+        vx, vy = lx2 - lx1, ly2 - ly1
+        denom_s = vx * vx + vy * vy
+        if denom_s <= 1e-6:
+            return boundaries
+        for lid, (y0, y1, spline) in lane_splines.items():
+            if not (y0 - 60 <= y_mid <= y1 + 260):
+                continue
+            try:
+                x_at_y = float(spline(y_mid))
+            except Exception:
+                continue
+            t = ((x_at_y - lx1) * vx + (y_mid - ly1) * vy) / denom_s
+            boundaries[lid] = max(0.0, min(1.0, t))
+        return boundaries
+
+    @staticmethod
     def _assign_section_event_lane(
         section_name: str,
         class_name: str,
-        x1: int,
-        y1: int,
-        x2: int,
-        y2: int,
-        lane_splines: dict[int, tuple[float, float, object]],
-        section_lines_by_name: dict[str, tuple[str, int, int, int, int, str, str]],
+        direction: str,
+        cross_t: float | None,
+        boundary_t: dict[int, float] | None,
     ) -> int | str | None:
-        """按断面局部几何重算 event lane_id。"""
-        section_line = section_lines_by_name.get(section_name)
-        if section_line is None or len(lane_splines) < 2:
+        """用轨迹线段交点 cross_t + 预计算的车道分界线 t 阈值判定车道。
+
+        Args:
+            section_name: 断面名称
+            direction: 叉积方向（离去/到达）
+            cross_t: 轨迹线段与断面线的交点 t ∈ [0,1]
+            boundary_t: _compute_lane_boundary_cross_t 预计算的车道线 t 阈值
+        """
+        if cross_t is None or boundary_t is None or len(boundary_t) < 2:
             return None
 
-        _, lx1, ly1, lx2, ly2, _, _ = section_line
-        anchor_x, anchor_y = TrajectoryTracker._project_point_to_segment(
-            float((x1 + x2) / 2.0),
-            float(max(y1, y2 - 2)),
-            float(lx1),
-            float(ly1),
-            float(lx2),
-            float(ly2),
-        )
-        xs_by_lid = TrajectoryTracker._lane_boundary_xs_at_y(anchor_y, lane_splines)
-        if len(xs_by_lid) < 2:
-            return None
-
-        # 主断面：L1 外侧是 OPPOSITE，L4-L5 之间是最外侧非机动车道（车道 4）。
-        # 关键词匹配代替精确名称匹配，兼容 sections.json 和 settings.py 的不同命名。
+        # ── 主断面：离去方向强先验 → OPPOSITE ──
         if "主断面" in section_name:
-            # 降级策略：≥3 条线可用即可判定，不再要求全部 5 条
-            if len(xs_by_lid) < 3:
-                return None
-            # 按 x 坐标降序排列（从右到左，即从对向侧到路缘侧）
-            # 北进口几何：线1 x最大（右/对向侧），线5 x最小（左/路缘侧）
-            sorted_by_x = sorted(xs_by_lid.items(), key=lambda kv: kv[1], reverse=True)
-            outer_lid, x_outer = sorted_by_x[0]   # x 最大的线（对向侧）
-            inner_lid, x_inner = sorted_by_x[-1]  # x 最小的线（路缘侧）
-            if anchor_x >= x_outer:
+            if direction == "离去":
                 return "OPPOSITE"
-            if anchor_x < x_inner:
+            sorted_bounds = sorted(boundary_t.items(), key=lambda kv: kv[1], reverse=True)
+            if len(sorted_bounds) < 2:
                 return None
-            # 在按 x 降序排列的相邻线之间分配车道
-            for i in range(len(sorted_by_x) - 1):
-                left_lid, left_x = sorted_by_x[i]       # x 较大（右侧）
-                right_lid, right_x = sorted_by_x[i + 1]  # x 较小（左侧）
-                if right_x <= anchor_x < left_x:
+            _, t_outer = sorted_bounds[0]
+            _, t_inner = sorted_bounds[-1]
+            if cross_t >= t_outer:
+                return "OPPOSITE"
+            if cross_t < t_inner:
+                return None
+            for i in range(len(sorted_bounds) - 1):
+                left_lid, left_t = sorted_bounds[i]
+                right_lid, right_t = sorted_bounds[i + 1]
+                if right_t <= cross_t < left_t:
                     return min(left_lid, right_lid)
             return None
 
-        # 右转 / 掉头 / 其他转弯断面：按断面语义区分处理
+        # ── 转弯断面 ──
         if any(kw in section_name for kw in ("右转", "掉头", "左转", "转弯", "待转")):
-            if len(xs_by_lid) < 2:
+            sorted_bounds = sorted(boundary_t.items(), key=lambda kv: kv[1], reverse=True)
+            if len(sorted_bounds) < 2:
                 return None
-            sorted_by_x = sorted(xs_by_lid.items(), key=lambda kv: kv[1], reverse=True)
-            _, x_outer = sorted_by_x[0]   # x 最大的线
-            _, x_inner = sorted_by_x[-1]  # x 最小的线
-
-            # 掉头车道：紧挨 L1 线外侧，以 L1（x 最大线）为界
-            if "掉头" in section_name:
-                if anchor_x >= x_outer:
-                    return 1
-                return None
-
-            # 右转等转弯断面：最外侧窄区记为车道 2，主车道记为车道 1
-            if anchor_x >= x_outer:
+            _, t_outer = sorted_bounds[0]
+            _, t_inner = sorted_bounds[-1]
+            if cross_t >= t_outer:
                 return 2
-            if x_inner <= anchor_x < x_outer:
+            if t_inner <= cross_t < t_outer:
                 return 1
             return None
 
-        ordered = sorted(xs_by_lid.items(), key=lambda item: item[1], reverse=True)
-        for idx in range(len(ordered) - 1):
-            left_lid, left_x = ordered[idx]
-            right_lid, right_x = ordered[idx + 1]
-            if right_x <= anchor_x < left_x:
-                return min(left_lid, right_lid)
         return None
-
     @staticmethod
     def _trajectory_matches_turn_section(
         section_name: str,
@@ -807,6 +795,13 @@ class TrajectoryTracker:
         # 断面检测器（复用同一 SpeedEstimator）
         _section_lines = _resolve_section_lines(video_path)
         _section_lines_by_name = {line[0]: line for line in _section_lines}
+        # 预计算每个断面的车道分界线 t 阈值
+        _boundary_t_by_section: dict[str, dict[int, float]] = {}
+        if _lane_splines:
+            for sec_name, sec_line in _section_lines_by_name.items():
+                bt = self._compute_lane_boundary_cross_t(sec_line, _lane_splines)
+                if bt:
+                    _boundary_t_by_section[sec_name] = bt
         section_det = CrossSectionDetector(
             _section_lines, _H, PIXELS_PER_METER, video_fps,
             speed_estimator=speed_est,
@@ -892,16 +887,29 @@ class TrajectoryTracker:
                         tid   = ids[i]
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
 
+                        # ── bbox EMA 平滑滤波 ─────────────────────────────
+                        # 非机动车小框抖动大，用指数平滑稳定车道判定
+                        if tid is not None:
+                            alpha = 0.3 if label in ("motorcycle", "bicycle") else 0.6
+                            prev = self._bbox_smooth.get(tid)
+                            if prev is not None:
+                                x1 = int(alpha * x1 + (1 - alpha) * prev[0])
+                                y1 = int(alpha * y1 + (1 - alpha) * prev[1])
+                                x2 = int(alpha * x2 + (1 - alpha) * prev[2])
+                                y2 = int(alpha * y2 + (1 - alpha) * prev[3])
+                            self._bbox_smooth[tid] = (x1, y1, x2, y2)
+
                         # ── 非机动车重分类 ──────────────────────────────────
                         # YOLO 在远处容易把电动车/摩托车误判为 car。
-                        # 用 bbox 尺寸 + 长宽比信号纠正，不依赖断面/车道先验。
+                        # 用 bbox 尺寸 + 长宽比信号纠正。
+                        # 数据驱动阈值: motorcycle 面积中位数 6209, aspect 中位数 1.59
+                        #               car 面积中位数 13965, aspect 中位数 0.82
                         if label == "car":
                             bw = x2 - x1
                             bh = y2 - y1
                             area = bw * bh
                             aspect = bh / max(bw, 1)
-                            # 二轮车在 4K 画面中的典型尺寸远小于汽车
-                            if area < 8000 and aspect > 1.6:
+                            if area < 15000 and aspect > 1.2:
                                 label = "motorcycle"
 
                         boxes_xyxy.append((x1, y1, x2, y2))
@@ -1015,21 +1023,25 @@ class TrajectoryTracker:
                             _traj_buf.get(_tid, []),
                         ):
                             continue
-                        if _lane_splines:
+                        # 主断面：直接用 _assign_lane() 在车辆实际y处的判定结果，
+                        # 不再用断面投影重算（投影法已验证无效）。
+                        # 转弯断面：仍用 _assign_section_event_lane 做几何约束。
+                        sec_name = str(ev.get("section", ""))
+                        if _lane_splines and "主断面" not in sec_name:
                             lane_override = self._assign_section_event_lane(
-                                str(ev.get("section", "")),
+                                sec_name,
                                 _label,
-                                _bx1,
-                                _by1,
-                                _bx2,
-                                _by2,
-                                _lane_splines,
-                                _section_lines_by_name,
+                                str(ev.get("direction", "")),
+                                ev.get("cross_t"),
+                                _boundary_t_by_section.get(sec_name),
                             )
                             if lane_override:
                                 ev["lane_id"] = lane_override
                         # 将已识别车牌绑定到过线事件（按 track_id 查缓存）
                         ev["plate"] = self._plate_rec._cache.get(_tid, ("", None))[0]
+
+                        ev["lane_rule"] = "bbox_bottom" if "主断面" in sec_name else ("cross_segment" if _boundary_t_by_section else "last_known")
+
                         cross_writer.writerow(ev)
                         _all_cross_events.append(ev)
                         _live_recent_events.append({
