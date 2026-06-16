@@ -370,6 +370,8 @@ class TrajectoryTracker:
         self.conf       = conf
         self._model     = YOLO(str(self.model_path))
         self._model.to(device)
+        if device == "cuda":
+            self._model.model.half()
         self._plate_rec = PlateRecognizer()
         self._bbox_smooth: dict[int, tuple[int, int, int, int]] = {}
         print(f"[Tracker] 模型: {self.model_path.name}  设备: {device}")
@@ -590,6 +592,18 @@ class TrajectoryTracker:
                 right_lid, right_t = sorted_bounds[i + 1]
                 if right_t <= cross_t < left_t:
                     return min(left_lid, right_lid)
+            return None
+
+        # ── 东进口右转专用道：L5-L6 为右转车道 ──
+        if "东进口" in section_name and "右转" in section_name:
+            if boundary_t is None or not all(k in boundary_t for k in (5, 6)):
+                return None
+            t_l5 = boundary_t[5]
+            t_l6 = boundary_t[6]
+            if cross_t >= t_l5:
+                return 2
+            if t_l6 <= cross_t < t_l5:
+                return 5
             return None
 
         # ── 转弯断面 ──
