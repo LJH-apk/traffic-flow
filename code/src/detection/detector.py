@@ -19,7 +19,7 @@ from src.config.settings import (
     VEHICLE_CLASSES,
     DEVICE,
     CONF_THRESH,
-    VIDEO_PATH,
+    DATA_DIR,
     OUTPUT_DIR,
     MODEL_DIR,
     MODEL_NAME,
@@ -64,7 +64,7 @@ class VehicleDetector:
 
     def run(
         self,
-        video_path: str | Path = VIDEO_PATH,
+        video_path: str | Path | None = None,
         output_path: str | Path = _OUTPUT,
         max_frames: int | None = _MAX_FRAMES,
     ) -> dict:
@@ -78,6 +78,9 @@ class VehicleDetector:
         Returns:
             包含 avg_fps / min_fps / max_fps / frame_count / vehicle_counts 的统计字典。
         """
+        if video_path is None:
+            mp4s = sorted(DATA_DIR.glob("*.mp4"))
+            video_path = mp4s[0] if mp4s else DATA_DIR / "test_video.mp4"
         cap    = open_video(video_path)
         meta   = video_meta(cap)
         writer = make_writer(output_path, meta["fps"], meta["width"], meta["height"])

@@ -16,9 +16,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 import cv2
 import numpy as np
 
-from src.config.settings import VIDEO_PATH
-
-_INSTRUCTION = """\
+from src.config.settings import_INSTRUCTION = """\
 [calibrate] 请依次点击斑马线4角点：
   1. 最顶条纹 左上角
   2. 最顶条纹 右上角
@@ -35,7 +33,7 @@ def _on_mouse(event, x, y, flags, param):
         print(f"  点 {len(_clicks)}: ({x}, {y})")
 
 
-def run(video_path=VIDEO_PATH, frame_idx: int = 0):
+def run(video_path=, frame_idx: int = 0):
     cap = cv2.VideoCapture(str(video_path))
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
     ret, frame = cap.read()

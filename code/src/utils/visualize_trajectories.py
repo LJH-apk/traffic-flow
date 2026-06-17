@@ -12,9 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 
-from src.config.settings import OUTPUT_DIR, VIDEO_PATH
-
-CSV_PATH = OUTPUT_DIR / "trajectory.csv"
+from src.config.settings import OUTPUT_DIRCSV_PATH = OUTPUT_DIR / "trajectory.csv"
 OUT_PNG = OUTPUT_DIR / "trajectory_map.png"
 
 # 各类别颜色（RGB, 0-1）
@@ -45,7 +43,7 @@ def load_background(video_path: Path, scale: float = 0.4) -> np.ndarray:
 
 def main():
     df  = pd.read_csv(CSV_PATH)
-    bg  = load_background(VIDEO_PATH)
+    bg  = load_background()
     H, W = bg.shape[:2]
 
     # 原始视频分辨率（用于坐标缩放）

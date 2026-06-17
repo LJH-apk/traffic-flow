@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.config.settings import DATA_DIR, VIDEO_PATH
+from src.config.settings import DATA_DIR
 
 
 def main() -> None:
@@ -53,7 +53,7 @@ def _run_command(command: str) -> None:
     if command == "detect":
         from src.detection.detector import VehicleDetector
 
-        VehicleDetector().run(video_path=VIDEO_PATH)
+        VehicleDetector().run(video_path=_choose_video())
         return
 
     if command == "track":
@@ -98,16 +98,9 @@ def _run_command(command: str) -> None:
 
 
 def _choose_video() -> Path:
-    videos = [
-        DATA_DIR / "北进口_20260420075959至20260420081500.mp4",
-        DATA_DIR / "东进口_20260420075958至20260420081459.mp4",
-        DATA_DIR / "南进口_20260420075959至20260420081500.mp4",
-        VIDEO_PATH,
-    ]
-    existing = [path for path in videos if path.exists()]
+    existing = sorted(DATA_DIR.glob("*.mp4"))
     if not existing:
-        return VIDEO_PATH
-
+        raise FileNotFoundError(f"未找到 .mp4 视频文件: {DATA_DIR}")
     print("\n可用视频")
     for index, path in enumerate(existing, start=1):
         print(f"{index}. {path.name}")

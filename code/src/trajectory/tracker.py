@@ -27,7 +27,6 @@ from src.config.settings import (
     VEHICLE_CLASSES,
     DEVICE,
     CONF_THRESH,
-    VIDEO_PATH,
     OUTPUT_DIR,
     MODEL_DIR,
     MODEL_NAME,
@@ -68,7 +67,6 @@ _END_FRAME   = 9000                            # 终止帧号（不含），None
 _GRACE_FRAMES = 10                              # track消失后保留帧数，防止碎片化
 _OUTPUT_VID  = OUTPUT_DIR / "trajectory.mp4"  # 带轨迹标注的输出视频
 _LIVE_PREVIEW_FPS = 18.0                       # Web 实时预览发布帧率
-_TEST_VIDEO  = DATA_DIR / "北进口_20260420075959至20260420081500.mp4"
 
 
 class TrajectoryTracker:
@@ -192,7 +190,7 @@ class TrajectoryTracker:
 
     def run(
         self,
-        video_path: str | Path = _TEST_VIDEO,
+        video_path: str | Path | None = None,
         output_video: str | Path = _OUTPUT_VID,
         csv_path: str | Path = TRAJ_CSV_PATH,
         start_frame: int = _START_FRAME,
@@ -216,6 +214,9 @@ class TrajectoryTracker:
         Returns:
             写出的 CSV 文件路径。
         """
+        if video_path is None:
+            mp4s = sorted(DATA_DIR.glob("*.mp4"))
+            video_path = mp4s[0] if mp4s else DATA_DIR / "test_video.mp4"
         _output_lock = TrackerOutputLock(OUTPUT_DIR / ".tracker.lock").__enter__()
         cap  = open_video(video_path)
         meta = video_meta(cap)
@@ -724,4 +725,4 @@ class TrajectoryTracker:
 
 if __name__ == "__main__":
     tracker = TrajectoryTracker()
-    tracker.run(video_path=_TEST_VIDEO, start_frame=_START_FRAME, end_frame=_END_FRAME)
+    tracker.run(start_frame=_START_FRAME, end_frame=_END_FRAME)

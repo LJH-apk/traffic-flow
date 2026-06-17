@@ -12,9 +12,7 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
-from src.config.settings import OUTPUT_DIR, VIDEO_PATH
-
-CSV_PATH = OUTPUT_DIR / "trajectory.csv"
+from src.config.settings import OUTPUT_DIRCSV_PATH = OUTPUT_DIR / "trajectory.csv"
 OUT_PATH = OUTPUT_DIR / "trajectory_video.mp4"
 
 MAX_FRAMES  = 1000    # 只处理前 N 帧，None = 全部
@@ -44,7 +42,7 @@ def main():
     for tid in track_points:
         track_points[tid].sort(key=lambda x: x[0])
 
-    cap = cv2.VideoCapture(str(VIDEO_PATH))
+    cap = cv2.VideoCapture(str())
     fps    = cap.get(cv2.CAP_PROP_FPS) or 25.0
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

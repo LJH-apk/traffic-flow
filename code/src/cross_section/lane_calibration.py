@@ -33,7 +33,6 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from src.config.settings import (
     CALIBRATIONS_DIR,
     ENTRANCE_ALIASES,
-    VIDEO_PATH,
 )
 from src.cross_section.lane_annotator import (
     annotate as run_annotator,
@@ -507,7 +506,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="车道标定管理：解析视频名 → 加载/创建标定"
     )
-    parser.add_argument("--video", default=str(VIDEO_PATH),
+    parser.add_argument("--video", default=str(),
                         help="视频文件路径")
     parser.add_argument("--no-annotate", action="store_true",
                         help="不触发交互标注（仅查询）")

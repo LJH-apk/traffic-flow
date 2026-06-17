@@ -3,14 +3,13 @@
 """
 from pathlib import Path
 
-_ROOT = Path(__file__).parents[3]
-SRC_DIR = Path(__file__).parents[2]
+_ROOT = Path(__file__).parents[2]
+SRC_DIR = Path(__file__).parents[1]
 ASSETS_DIR = SRC_DIR / "assets"
 DATA_DIR = ASSETS_DIR / "data"
 MODEL_DIR = ASSETS_DIR / "models"
 CALIBRATIONS_DIR = ASSETS_DIR / "calibrations"
 
-VIDEO_PATH = DATA_DIR / "test_video.mp4"
 OUTPUT_DIR = _ROOT / "outputs"
 
 # ── 模型 ──────────────────────────────────────────────────────────────────────

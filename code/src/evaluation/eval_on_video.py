@@ -29,7 +29,6 @@ from src.config.settings import (
     OUTPUT_DIR,
     SAMPLE_EVERY,
     VEHICLE_CLASSES,
-    VIDEO_PATH,
 )
 
 matplotlib.rcParams["font.family"] = "Arial Unicode MS"
@@ -120,7 +119,7 @@ def main() -> None:
     model_gt   = YOLO(str(MODEL_DIR / MODEL_NAME_GT))
     model_pred = YOLO(str(MODEL_DIR / MODEL_NAME))
 
-    cap    = cv2.VideoCapture(str(VIDEO_PATH))
+    cap    = cv2.VideoCapture(str())
     total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     sample_ids = list(range(0, min(total, SAMPLE_EVERY * MAX_SAMPLES), SAMPLE_EVERY))
     print(f"视频共 {total} 帧，采样 {len(sample_ids)} 帧（每{SAMPLE_EVERY}帧取1帧）\n")
