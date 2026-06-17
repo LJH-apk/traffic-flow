@@ -36,19 +36,16 @@ pip install ultralytics opencv-python numpy scipy hyperlpr3 openpyxl
 支持的进口关键词：`北进口` / `南进口` / `东进口`（或 `north` / `south` / `east`）。  
 若文件名不含任何进口名，系统会退化为加载全部断面线，断面归属和标定数据将不可用。
 
-将视频放入项目根目录或 `data/` 目录，然后修改 `src/trajectory/tracker.py` 顶部的路径变量：
-
-```python
-_TEST_VIDEO  = "北进口_20260420075959至20260420081500.mp4"  # 修改为实际文件名
-_START_FRAME = 0      # 起始帧，0 = 从头开始
-_END_FRAME   = 9000   # 终止帧，None = 跑到结尾
-```
+输入视频统一放在 `src/assets/data/`，模型权重放在 `src/assets/models/`，标定数据放在 `src/assets/calibrations/`。
 
 ### 2. 运行检测与跟踪
 
 ```bash
+# 交互式主入口
+python3 -m src.main
+
 # 逐帧检测（可选，输出 outputs/detection.mp4）
-python3 -u src/detection/detector.py
+python3 -m src.main detect
 
 # 轨迹跟踪 + 车牌识别 + 断面过车 + 轨迹分组（核心流程）
 # 输出：outputs/trajectory.mp4
@@ -57,15 +54,29 @@ python3 -u src/detection/detector.py
 #        outputs/vehicle_stats.csv     车辆统计
 #        outputs/trajectory_groups.csv 轨迹分组
 #        outputs/traffic_report.xlsx   汇总报表
-python3 -u src/trajectory/tracker.py
+python3 -m src.main track
+
+# 三进口批量跟踪
+python3 -m src.main run-all
 ```
 
 ### 3. 查看数据仪表盘
 
+仪表盘提供两种模式（按键盘 `1`/`2` 或点击顶栏切换）：
+
+- **演示模式** (`#demo`)：全屏检测视频 + 四角 KPI 浮层，数据随视频进度实时同步，适合录制答辩演示视频
+- **数据看板** (`#dashboard`)：KPI 总览 + ECharts 图表（车型分布/速度分布/断面流量/精度评估）+ 轨迹路径图 + 过车事件列表
+
 ```bash
-python3 run_dashboard.py
+# 首次启动会自动构建仪表盘数据（约1秒）
+python3 -m src.main dashboard
 # 浏览器自动打开 http://localhost:8765
+
+# 手动重建仪表盘数据（重新跑 tracker 后）
+python3 -m src.main build-dashboard
 ```
+
+仪表盘前端为纯原生 HTML/CSS/JS，通过 ECharts CDN 渲染图表，数据由 `src.dashboard.build_data` 从 CSV 预计算为 `outputs/dashboard/*.json` 静态文件。
 
 ---
 
@@ -86,6 +97,14 @@ python3 run_dashboard.py
 
 `eval_on_video.py` 使用 `yolo26x` 做伪 GT，只能反映模型一致性。正式测试报告建议使用人工复核集验证：北进口、南进口、东进口各抽 5 分钟，人工记录每辆车通过断面线的帧号、方向、类别，并用脚本对 `outputs/cross_section.csv` 做事件匹配、车头时距复算、车头间距一致性检查和异常事件检查。
 
+验证脚本会自动完成这些处理：
+
+- 支持直接读取 `xlsx` 或 `csv`
+- 自动把 `主 / 右 / 北进口主断面 / 北进口右转专用道` 统一到标准断面名
+- 自动截取预测与人工标注的重叠时间窗，只对可比区间计入 FN
+- 自动折叠预测里的短间隔重复触发，避免重复事件拉低精度
+- 方向字段按断面语义比较：主断面对比 `direction`，右转断面对比 `arrival_departure`
+
 人工过线标注 CSV 至少包含以下字段：
 
 ```csv
@@ -99,7 +118,8 @@ gt_frame_id,section,track_id,class_name,direction
 ```bash
 python3 -u src/evaluation/manual_validation.py \
   --cross-section outputs/cross_section.csv \
-  --manual-crossing annotations/manual_crossing_annotations.csv \
+  --manual-crossing /Users/liujiahang/Desktop/智慧交通.xlsx \
+  --export-normalized-manual annotations/manual_crossing.csv \
   --output-dir outputs/validation \
   --fps 25 \
   --frame-tolerance 10
@@ -124,6 +144,7 @@ python3 -u src/evaluation/manual_validation.py \
 
 ```
 src/
+  main.py                       # 交互式主入口
   config/settings.py            # 唯一配置源：路径、模型、阈值、断面线、标定参数
   detection/detector.py         # 纯检测模块（无跟踪）
   trajectory/
@@ -146,14 +167,17 @@ src/
     eval_on_video.py            # 伪 GT 精度评测（yolo26x 作 GT）
     eval_coco.py                # COCO val2017 标准评测
     manual_validation.py        # 人工复核集验证 + 绘图明细导出
+  dashboard/
+    static/                     # 数据可视化前端
+    server.py                   # 零依赖 HTTP 服务（内置 http.server）
+  assets/
+    data/                       # 输入视频和训练数据
+    models/                     # 模型权重
+    calibrations/               # 各进口车道线 + 单应矩阵标定数据
 tests/
   trajectory/
     test_traj_grouper.py        # TrajGrouper 单元测试（13 个）
     test_grouper_smoke.py       # 冒烟测试（读 trajectory.csv 模拟在线分组）
-dashboard/
-  index.html                    # 数据可视化前端
-  server.py                     # 零依赖 HTTP 服务（内置 http.server）
-calibrations/                   # 各进口车道线 + 单应矩阵标定数据
 ```
 
 ---
@@ -166,7 +190,7 @@ calibrations/                   # 各进口车道线 + 单应矩阵标定数据
 # 手动标定单应矩阵（斑马线 4 角点 → H 矩阵）
 python3 src/cross_section/calibrate.py
 
-# 交互式车道线标注（生成 calibrations/<进口>/ 标定文件）
+# 交互式车道线标注（生成 src/assets/calibrations/<进口>/ 标定文件）
 python3 src/cross_section/annotate_lane.py
 ```
 
@@ -181,7 +205,7 @@ python3 src/cross_section/annotate_lane.py
 | `yolo26l.pt` | 50 MB | 高精度 |
 | `yolo26x.pt` | 113 MB | 伪 GT 生成器（评测专用） |
 
-在 `src/config/settings.py` 中修改 `MODEL_NAME` 切换模型。迁移至 NVIDIA 时将 `DEVICE` 改为 `"cuda"`。
+模型文件位于 `src/assets/models/`。在 `src/config/settings.py` 中修改 `MODEL_NAME` 切换模型。迁移至 NVIDIA 时将 `DEVICE` 改为 `"cuda"`。
 
 ---
 

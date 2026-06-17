@@ -1,0 +1,50 @@
+{
+  "image": "/Users/liujiahang/科研/交通流算法/src/assets/calibrations/北进口/ref.jpg",
+  "sections": [
+    {
+      "name": "北进口主断面",
+      "points": [
+        [
+          1386,
+          465
+        ],
+        [
+          2553,
+          429
+        ]
+      ],
+      "dir_pos": "离去",
+      "dir_neg": "到达"
+    },
+    {
+      "name": "北进口掉头车道",
+      "points": [
+        [
+          2343,
+          615
+        ],
+        [
+          2529,
+          726
+        ]
+      ],
+      "dir_pos": "到达",
+      "dir_neg": "离去"
+    },
+    {
+      "name": "北进口右转专用道",
+      "points": [
+        [
+          2460,
+          1005
+        ],
+        [
+          2778,
+          903
+        ]
+      ],
+      "dir_pos": "到达",
+      "dir_neg": "离去"
+    }
+  ]
+}

@@ -3,12 +3,15 @@
 """
 from pathlib import Path
 
-# ── 路径 ──────────────────────────────────────────────────────────────────────
-_ROOT       = Path(__file__).parents[2]                     # 项目根目录
+_ROOT = Path(__file__).parents[2]
+SRC_DIR = Path(__file__).parents[1]
+ASSETS_DIR = SRC_DIR / "assets"
+DATA_DIR = ASSETS_DIR / "data"
+MODEL_DIR = ASSETS_DIR / "models"
+CALIBRATIONS_DIR = ASSETS_DIR / "calibrations"
 
-VIDEO_PATH  = _ROOT / "data" / "test_video.mp4"            # 比赛测试视频
-OUTPUT_DIR  = _ROOT / "outputs"                             # 所有生成文件的输出目录
-MODEL_DIR   = _ROOT                                         # .pt 权重所在目录（暂留根目录）
+VIDEO_PATH = DATA_DIR / "test_video.mp4"
+OUTPUT_DIR = _ROOT / "outputs"
 
 # ── 模型 ──────────────────────────────────────────────────────────────────────
 MODEL_NAME      = "yolo26m.pt"   # 主推理模型，可切换 yolo26n/s/m/l/x.pt
@@ -87,9 +90,6 @@ PIXELS_PER_METER: float = 85.0
 
 CROSS_SECTION_CSV_PATH = OUTPUT_DIR / "cross_section.csv"
 CROSS_EVENT_COOLDOWN_FRAMES = 25  # 同一 track 同一断面短时间重复翻转视为抖动
-
-# ── 车道标定 ──────────────────────────────────────────────────────────────────
-CALIBRATIONS_DIR = _ROOT / "calibrations"
 
 # ── 光照预设（按时段或检测结果切换检测参数）───────────────────────────────────
 LIGHTING_PRESETS: dict[str, dict] = {

@@ -1,8 +1,8 @@
 import threading
 import time
 
-from dashboard.live import LiveState
-from dashboard.server import DashboardApp
+from src.dashboard.live import LiveState
+from src.dashboard.server import DashboardApp
 
 
 class BlockingTracker:

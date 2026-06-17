@@ -1,0 +1,35 @@
+{
+  "image": "/Users/liujiahang/科研/交通流算法/src/assets/calibrations/东进口/ref.jpg",
+  "sections": [
+    {
+      "name": "东进口主断面",
+      "points": [
+        [
+          1350,
+          1047
+        ],
+        [
+          2796,
+          1017
+        ]
+      ],
+      "dir_pos": "到达",
+      "dir_neg": "离去"
+    },
+    {
+      "name": "东进口右转专用道",
+      "points": [
+        [
+          1404,
+          963
+        ],
+        [
+          1245,
+          840
+        ]
+      ],
+      "dir_pos": "到达",
+      "dir_neg": "离去"
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import threading
 
 import numpy as np
 
-from dashboard.live import LiveState
+from src.dashboard.live import LiveState
 
 
 def test_live_state_tracks_status_stats_and_stop_signal():

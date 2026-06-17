@@ -13,7 +13,7 @@ runs/
 *.png
 *.json
 # 标定数据目录例外（纳入版本管理）
-!calibrations/**/*.json
+!src/assets/calibrations/**/*.json
 
 # Python 缓存
 __pycache__/
@@ -26,6 +26,15 @@ __pycache__/
 
 # 数据目录（含视频符号链接）
 data/
+!src/assets/data/
+src/assets/data/*
+!src/assets/data/.gitkeep
+!src/assets/models/
+src/assets/models/*
+!src/assets/models/.gitkeep
+!src/assets/models/extra/
+src/assets/models/extra/*
+!src/assets/models/extra/.gitkeep
 
 # 比赛文档（含敏感信息，不纳入版本管理）
 docs/
@@ -54,3 +63,6 @@ test_*.py
 train_*.py
 # 但 tests/ 目录下的测试文件需要纳入版本管理
 !tests/**/test_*.py
+# 归档后的实验脚本保留路径
+!experiments/
+!experiments/*.py

@@ -1,14 +1,13 @@
 import json
-from pathlib import Path
 
+from src.config.settings import CALIBRATIONS_DIR
 from src.trajectory.tracker import TrajectoryTracker
 
 
 def _load_north_lane_context():
-    root = Path(__file__).resolve().parents[1]
-    with (root / "calibrations" / "北进口" / "lanes.json").open(encoding="utf-8") as fh:
+    with (CALIBRATIONS_DIR / "北进口" / "lanes.json").open(encoding="utf-8") as fh:
         lanes = json.load(fh)["lanes"]
-    with (root / "calibrations" / "北进口" / "sections.json").open(encoding="utf-8") as fh:
+    with (CALIBRATIONS_DIR / "北进口" / "sections.json").open(encoding="utf-8") as fh:
         sections = json.load(fh)["sections"]
     lane_points = {int(k): [tuple(pt) for pt in v] for k, v in lanes.items()}
     lane_splines = TrajectoryTracker._build_lane_splines(lane_points)
