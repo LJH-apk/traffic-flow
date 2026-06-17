@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>交通流数据检测算法</title>
+<style>
+  :root {
+    --navy: #002c53; --blue: #0c84c6; --teal: #41b7ac; --gold: #ffa510;
+    --red: #f74d4d; --bg: #f8f9fa; --card: #fff; --text: #334155;
+    --muted: #64748b; --border: #e2e8f0; --code: #f1f5f9;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); line-height: 1.8; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+  .hero { background: linear-gradient(135deg, var(--navy), #0a3d6b); color: #fff; padding: 48px 32px; border-radius: 12px; margin-bottom: 40px; }
+  .hero h1 { font-size: 32px; margin-bottom: 8px; }
+  .hero .subtitle { font-size: 15px; opacity: 0.85; }
+  .hero .badges { margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 4px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+  .badge.model { background: rgba(255,255,255,0.2); }
+  .badge.acc { background: var(--teal); }
+  h2 { font-size: 22px; color: var(--navy); margin: 40px 0 16px; padding-left: 14px; border-left: 4px solid var(--teal); }
+  h3 { font-size: 16px; color: var(--navy); margin: 24px 0 8px; }
+  p { margin: 8px 0; }
+  code { background: var(--code); padding: 2px 7px; border-radius: 4px; font-size: 13px; font-family: "SF Mono", "Fira Code", "Menlo", monospace; }
+  pre { background: #1e293b; color: #e2e8f0; padding: 20px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.6; margin: 12px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th { background: var(--navy); color: #fff; padding: 10px 14px; text-align: left; font-size: 13px; font-weight: 600; }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  tr:hover td { background: #f8fafc; }
+  .check { color: var(--teal); font-weight: bold; }
+  .warn { color: var(--gold); font-weight: bold; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; }
+  .card h3 { margin-top: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .metric { text-align: center; padding: 20px; background: var(--card); border-radius: 8px; border: 1px solid var(--border); }
+  .metric .value { font-size: 36px; font-weight: 800; color: var(--teal); }
+  .metric .label { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .metric .target { font-size: 11px; color: var(--muted); }
+  footer { text-align: center; padding: 40px 0 20px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); margin-top: 60px; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="hero">
+  <h1>交通流数据检测算法</h1>
+  <p class="subtitle">第十届全国高校智能交通创新创业大赛 · 企业赛道参赛作品</p>
+  <div class="badges">
+    <span class="badge model">YOLOv26m</span>
+    <span class="badge model">ByteTrack</span>
+    <span class="badge model">HyperLPR3</span>
+    <span class="badge acc">分类 95.3%</span>
+    <span class="badge acc">车道 93.8%</span>
+  </div>
+</div>
+
+<h2>项目概述</h2>
+<p>本项目为交通路口 <b>4K 监控视频</b>的实时车辆检测与交通流参数提取系统。输入为固定机位拍摄的 15 分钟 4K（3840×2160, 25fps）视频，输出为 <b>10 类结构化交通数据</b>（断面流量、车头时距、速度、车型、车道、轨迹、车牌、排队长度、平均速度、密度）。</p>
+
+<div class="card">
+<h3>技术路线</h3>
+<p><code>YOLOv26m 逐帧检测</code> → <code>ByteTrack 多目标跟踪</code> → <code>叉积法断面过车判定</code> → <code>B 样条车道归属标定</code> → <code>单应矩阵速度估算</code> → <code>HyperLPR3 车牌识别</code> → <code>Excel 统计报表</code></p>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>覆盖范围</h3>
+    <p>丁字路口三个进口（北、东、南），<b>8 个断面</b>，<b>10 条车道</b>。北进口经 142 辆人工标定数据验证。</p>
+  </div>
+  <div class="card">
+    <h3>工程特性</h3>
+    <p>模块化设计 · 配置集中管理 · macOS MPS / CUDA 双平台 · HTTP 仪表盘 · 一键批量处理</p>
+  </div>
+</div>
+
+<h2>快速启动</h2>
+<pre># 安装依赖
+pip install -r src/requirements.txt
+
+# 交互菜单
+PYTHONPATH=. python3 -m src.main
+
+# 直接运行
+PYTHONPATH=. python3 -m src.main detect      # 逐帧检测
+PYTHONPATH=. python3 -m src.main track       # 轨迹跟踪 + 车牌 + 断面过车
+PYTHONPATH=. python3 -m src.main run-all     # 三进口批量跟踪
+PYTHONPATH=. python3 -m src.main dashboard   # 启动仪表盘</pre>
+
+<h2>精度指标 <small style="font-weight:400;color:var(--muted);font-size:14px">（北进口人工标定验证，142 辆）</small></h2>
+
+<div class="grid">
+  <div class="metric"><div class="value">95.3%</div><div class="label">车型分类</div><div class="target">要求 ≥90% ✅</div></div>
+  <div class="metric"><div class="value">93.8%</div><div class="label">车道判定</div><div class="target">要求 ≥90% ✅</div></div>
+  <div class="metric"><div class="value">96.1%</div><div class="label">方向判定</div><div class="target">—</div></div>
+  <div class="metric"><div class="value">93.2%</div><div class="label">间距一致性</div><div class="target">—</div></div>
+  <div class="metric"><div class="value">0.21s</div><div class="label">过线时间 MAE</div><div class="target">—</div></div>
+  <div class="metric"><div class="value">90.8%</div><div class="label">事件召回率</div><div class="target">—</div></div>
+</div>
+
+<h2>10 类结构化输出</h2>
+<table>
+<tr><th>#</th><th>数据类型</th><th>输出文件</th><th>说明</th></tr>
+<tr><td>1</td><td>断面流量</td><td><code>cross_section.csv</code></td><td>断面级过车事件，含时间戳</td></tr>
+<tr><td>2</td><td>车头时距</td><td><code>cross_section.csv</code></td><td><code>headway_s</code> 字段</td></tr>
+<tr><td>3</td><td>速度</td><td><code>cross_section.csv</code> / <code>vehicle_stats.csv</code></td><td>km/h</td></tr>
+<tr><td>4</td><td>车型</td><td><code>cross_section.csv</code></td><td>car / truck / bus / motorcycle / bicycle</td></tr>
+<tr><td>5</td><td>车道</td><td><code>cross_section.csv</code></td><td>车道 1-4 + OPPOSITE + 右转/掉头</td></tr>
+<tr><td>6</td><td>轨迹点</td><td><code>trajectory.csv</code></td><td>1FPS 采样，含坐标 + 速度</td></tr>
+<tr><td>7</td><td>车牌</td><td><code>trajectory.csv</code> / <code>cross_section.csv</code></td><td><code>plate</code> 字段</td></tr>
+<tr><td>8</td><td>排队长度</td><td><code>traffic_report.xlsx</code></td><td>速度 &lt; 10km/h 排队判定</td></tr>
+<tr><td>9</td><td>平均速度</td><td><code>vehicle_stats.csv</code></td><td>每车统计</td></tr>
+<tr><td>10</td><td>密度/间距</td><td><code>cross_section.csv</code></td><td><code>spacing_m</code> 字段</td></tr>
+</table>
+
+<h2>三进口覆盖</h2>
+<table>
+<tr><th>进口</th><th>断面</th><th>车道配置</th><th>事件数</th></tr>
+<tr><td>北进口</td><td>主断面 · 右转 · 掉头</td><td>车道 1-4 + 对向</td><td>1,029</td></tr>
+<tr><td>东进口</td><td>主断面 · 右转</td><td>车道 1-3 + 右转(L5-L6) + 对向</td><td>988</td></tr>
+<tr><td>南进口</td><td>主断面 · 右转 · 掉头</td><td>车道 1-3 + 对向</td><td>1,576</td></tr>
+</table>
+
+<h2>推理性能</h2>
+<table>
+<tr><th>设备</th><th>分辨率</th><th>帧率</th><th>说明</th></tr>
+<tr><td>Apple M2 (MPS)</td><td>1080 (1920×1080)</td><td>17 FPS</td><td>统一内存，GPU-CPU 零拷贝</td></tr>
+<tr><td>NVIDIA 4090 (CUDA)</td><td>1080p (1920×1080)</td><td>15 FPS</td><td>CPU 预处理瓶颈，GPU 利用率低</td></tr>
+</table>
+
+<h2>环境</h2>
+<ul>
+  <li><b>Python</b> 3.12+</li>
+  <li><b>核心依赖</b>：<code>ultralytics</code> · <code>opencv-python</code> · <code>numpy</code> · <code>scipy</code> · <code>matplotlib</code> · <code>openpyxl</code></li>
+  <li><b>可选</b>：<code>hyperlpr3</code>（车牌识别）</li>
+</ul>
+
+<h2>许可证</h2>
+<p>本项目仅用于第十届全国高校智能交通创新创业大赛企业赛道参赛评审。</p>
+<ul>
+  <li><b>视频数据</b>：版权归大赛主办方所有，仅限本赛道参赛使用。</li>
+  <li><b>模型权重</b>：遵循 Ultralytics AGPL-3.0 许可证。</li>
+  <li><b>源代码</b>：参赛团队原创，仅供大赛评审使用。</li>
+</ul>
+
+<footer>
+  <p>交通流数据检测算法 · 第十届全国高校智能交通创新创业大赛 · 企业赛道</p>
+</footer>
+
+</div>
+</body>
+</html>

@@ -642,16 +642,6 @@ class TrajectoryTracker:
                 _grouper.tick(timestamp_s)
 
                 if (local_idx + 1) % 30 == 0:
-                    avg30 = sum(fps_list[-30:]) / min(len(fps_list), 30)
-                    pct   = (local_idx + 1) / n_frames * 100
-                    n = min(local_idx + 1, 30)
-                    print(f"[{pct:5.1f}%] 帧 {frame_idx:4d}/{end_frame-1}  "
-                          f"FPS:{avg30:.1f} "
-                          f"推理:{_t_infer/n*1000:.0f}ms "
-                          f"后处理:{_t_post/n*1000:.0f}ms "
-                          f"断面:{_t_cross/n*1000:.0f}ms "
-                          f"绘制:{_t_draw/n*1000:.0f}ms "
-                          f"轨迹:{rows_written}", flush=True)
                     _t_infer = _t_post = _t_cross = _t_draw = 0.0
 
         # finalize grace buffer 中的 track（视频结束，强制到期）
@@ -683,7 +673,6 @@ class TrajectoryTracker:
         avg_fps = sum(fps_list) / len(fps_list) if fps_list else 0.0
         print(f"\n=== 轨迹提取完成 ===")
         print(f"处理帧数    : {len(fps_list)}")
-        print(f"平均推理FPS : {avg_fps:.1f}")
         print(f"轨迹记录行  : {rows_written}")
         print(f"CSV 输出    : {csv_path}")
         print(f"断面CSV     : {cross_path}")
