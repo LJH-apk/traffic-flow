@@ -22,17 +22,16 @@
 
 ```bash
 # 安装依赖
-pip install -r src/requirements.txt
+pip install -r requirements.txt
 
 # 交互菜单
-PYTHONPATH=. python3 -m src.main
+ python3 -m src.main
 
 # 直接运行
-PYTHONPATH=. python3 -m src.main detect      # 逐帧检测
-PYTHONPATH=. python3 -m src.main track       # 轨迹跟踪 + 车牌 + 断面过车
-PYTHONPATH=. python3 -m src.main run-all     # 三进口批量跟踪
-PYTHONPATH=. python3 -m src.main dashboard   # 启动仪表盘
-PYTHONPATH=. python3 -m src.main eval-video  # 伪GT精度评测
+python3 -m src.main detect      # 逐帧检测
+python3 -m src.main track       # 轨迹跟踪 + 车牌 + 断面过车
+python3 -m src.main run-all     # 三进口批量跟踪
+python3 -m src.main dashboard   # 启动仪表盘
 ```
 
 ## 目录结构
