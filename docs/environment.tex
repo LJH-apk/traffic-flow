@@ -1,0 +1,158 @@
+% !TEX program = xelatex
+\documentclass[12pt,a4paper]{ctexart}
+\usepackage[top=2.2cm, bottom=2.2cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+\lstset{
+    basicstyle=\small\ttfamily,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!5},
+    rulecolor=\color{gray!40},
+    xleftmargin=0.8em,
+    xrightmargin=0.8em,
+    aboveskip=0.5em,
+    belowskip=0.5em,
+    showstringspaces=false,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{gray!50}{面向交通流的数据检测算法}}
+\fancyhead[R]{\small\textcolor{gray!50}{环境说明}}
+\fancyfoot[C]{\small\textcolor{gray!50}{\thepage\,/\,\pageref{LastPage}}}
+
+\begin{document}
+
+\begin{center}
+    {\Large\bfseries 开发及运行环境说明}
+
+    \vspace{0.4cm}
+    面向交通流的数据检测算法 \quad·\quad 第十届全国高校智能交通创新创业大赛·企业赛道
+\end{center}
+
+\vspace{0.3cm}
+
+\section{硬件环境}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabularx}{\textwidth}{@{}p{3cm}L@{}}
+        \toprule
+        \textbf{项目} & \textbf{配置} \\
+        \midrule
+        开发机型 & Apple MacBook Pro（Apple M1） \\
+        内存 & 16\,GB 统一内存 \\
+        推理加速 & Apple MPS（Metal Performance Shaders），FP16 混合精度 \\
+        最低运行要求 & $\geq$ 8\,GB 内存，Apple Silicon 或 NVIDIA GPU \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\section{软件环境}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabularx}{\textwidth}{@{}p{3cm}L@{}}
+        \toprule
+        \textbf{项目} & \textbf{版本 / 说明} \\
+        \midrule
+        操作系统 & macOS 26.5（Build 25F71），兼容 Windows 11 \\
+        Python & 3.13.5（64-bit，ARM64 原生） \\
+        IDE & JetBrains PyCharm Professional（教育版订阅） \\
+        ultralytics & 8.4.51（YOLO 检测 + ByteTrack 跟踪） \\
+        opencv-python & 4.x（视频读写、图像处理、可视化绘制） \\
+        numpy & 2.x（矩阵运算、坐标转换） \\
+        scipy & 1.x（空间距离、B 样条插值、JS 散度） \\
+        hyperlpr3 & 最新版（车牌识别，可选依赖） \\
+        openpyxl & 3.x（Excel 多 Sheet 报表导出） \\
+        matplotlib & 3.x（轨迹图、验证报告图表） \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+推理设备切换：在 \texttt{src/config/settings.py} 中将 \texttt{DEVICE} 设为 \texttt{"mps"}（Apple Silicon）、\texttt{"cuda"}（NVIDIA GPU）或 \texttt{"cpu"} 即可。
+
+\section{依赖安装}
+
+\begin{lstlisting}[language=bash]
+# 核心依赖（必需）
+pip install ultralytics opencv-python numpy scipy openpyxl
+
+# 可选依赖（推荐安装，提升数据完整性）
+pip install hyperlpr3          # 车牌识别
+pip install matplotlib         # 评测图表
+pip install rapidocr-onnxruntime  # 辅助 OCR
+\end{lstlisting}
+
+\section{视频数据准备}
+
+系统根据视频文件名自动识别进口方向，检测视频及模型权重须按以下规范放置。
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabularx}{\textwidth}{@{}p{3.2cm}L@{}}
+        \toprule
+        \textbf{启动方式} & \textbf{存放路径} \\
+        \midrule
+        源代码启动 &
+        \texttt{src/assets/data/北进口\_20260420075959至20260420081500.mp4}\newline
+        \texttt{src/assets/models/yolo26m.pt} \\
+        \midrule
+        编译程序 (exe) 启动 &
+        \texttt{\_internal/src/assets/data/北进口\_20260420075959至20260420081500.mp4}\newline
+        \texttt{\_internal/src/assets/models/yolo26m.pt} \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+视频命名格式：\texttt{\{进口方向\}\_\{年月日\}\{时分秒\}至\{年月日\}\{时分秒\}.mp4}，其中进口方向为“北进口”“东进口”“南进口”之一。三进口视频示例如下：
+
+\begin{lstlisting}[language=bash]
+北进口_20260420075959至20260420081500.mp4
+东进口_20260420075958至20260420081459.mp4
+南进口_20260420075959至20260420081500.mp4
+\end{lstlisting}
+
+\section{运行命令}
+
+\begin{lstlisting}[language=bash]
+# 交互式主入口
+python3 -m src.main
+
+# 核心流程：轨迹跟踪 + 车牌识别 + 断面过车 + 轨迹分组 + 报表
+python3 -m src.main track
+
+# 三进口批量处理
+python3 -m src.main run-all
+
+# 启动数据仪表盘（浏览器访问 localhost:8765）
+python3 -m src.main dashboard
+\end{lstlisting}
+
+\subsection*{输出文件}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabularx}{\textwidth}{@{}p{3cm}L@{}}
+        \toprule
+        \textbf{文件} & \textbf{内容} \\
+        \midrule
+        \path|outputs/trajectory.mp4| & 轨迹叠加可视化视频（1080p） \\
+        \path|outputs/trajectory.csv| & 逐帧轨迹（坐标、速度、车道、车牌） \\
+        \path|outputs/cross_section.csv| & 断面过车事件（流量、时距、速度、颜色） \\
+        \path|outputs/trajectory_groups.csv| & 轨迹分组结果 \\
+        \path|outputs/traffic_report.xlsx| & 多 Sheet 汇总报表 \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\end{document}
