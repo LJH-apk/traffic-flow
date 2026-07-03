@@ -136,3 +136,37 @@ ENTRANCE_TRAVEL_DIR: dict[str, tuple[float, float]] = {
     "南进口": (0.0, -1.0),   # 向北（图像向上）
     "东进口": (-1.0, 0.0),   # 向西（图像向左）
 }
+
+# ── AI 交通分析智能体 ─────────────────────────────────────────────────────────
+import os
+
+DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY", "")            # 从环境变量注入，勿写入仓库
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_MODEL    = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODELS   = tuple(
+    m.strip() for m in os.environ.get(
+        "DEEPSEEK_MODELS", "deepseek-v4-flash,deepseek-v4-pro"
+    ).split(",") if m.strip()
+)
+DEEPSEEK_THINKING_STRENGTH = os.environ.get("DEEPSEEK_THINKING_STRENGTH", "medium")
+
+AGENT_HOST            = "127.0.0.1"
+AGENT_PORT            = 8766          # 与仪表盘 8765 错开
+AGENT_MAX_TOOL_ROUNDS = 8             # 单条消息最多工具调用轮数（防止死循环）
+AGENT_LLM_TIMEOUT_S   = 120           # LLM 请求超时（秒）
+AGENT_CONTEXT_WINDOW_TOKENS = int(os.environ.get("AGENT_CONTEXT_WINDOW_TOKENS", "64000"))
+AGENT_REPORT_PATH     = OUTPUT_DIR / "ai_analysis_report.md"
+
+# 车型中文名（智能体输出与前端展示用）
+CLASS_NAMES_ZH: dict[str, str] = {
+    "car": "小汽车", "truck": "货车", "bus": "公交/大客车",
+    "motorcycle": "摩托/电动车", "bicycle": "自行车",
+}
+
+# 信号配时估算（Webster 法粗估）
+SATURATION_FLOW_PCU_H = 1800.0        # 单车道饱和流率（pcu/h）
+PCU_FACTORS: dict[str, float] = {     # 车型换算系数（辆 → pcu）
+    "car": 1.0, "truck": 2.0, "bus": 2.5, "motorcycle": 0.4, "bicycle": 0.2,
+}
+SPEED_VALID_MAX_KMH   = 120.0         # 超过此速度的过线事件视为异常值（标定畸变/ID跳变）
+HEADWAY_DANGEROUS_S   = 1.5           # 车头时距低于此值视为危险跟驰
