@@ -8,7 +8,7 @@ import pytest
 from src.agent.analyst import TrafficAnalyst
 from src.agent.datastore import TrafficDataStore, _percentile, entrance_of
 from src.agent.knowledge import search_knowledge
-from src.agent.llm import LLMError
+from src.agent.llm import DeepSeekClient, LLMError
 from src.agent.tools import TOOL_DEFINITIONS, TOOL_LABELS_ZH, ToolExecutor
 
 INDEX = Path("src/agent/static/index.html")
@@ -51,6 +51,61 @@ class BrokenClient:
     def chat_stream(self, messages, tools=None, temperature=0.6):
         raise LLMError("模拟网络故障")
         yield  # pragma: no cover
+
+
+class _FakeSSEResponse:
+    """伪造 requests.Response：status_code=200，iter_lines 回放预置 SSE 行。"""
+
+    def __init__(self, lines):
+        self.status_code = 200
+        self._lines = lines
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+    def close(self):
+        pass
+
+
+def _sse(*chunks):
+    lines = [f"data: {json.dumps(c, ensure_ascii=False)}".encode() for c in chunks]
+    lines.append(b"data: [DONE]")
+    return lines
+
+
+# ── DeepSeekClient：SSE 流式解析（含思维链 reasoning_content）──────────────
+
+
+def test_chat_stream_parses_reasoning_content(monkeypatch):
+    """思考模式下 reasoning_content 必须被解析为独立事件，且原样保留进最终 message。"""
+    lines = _sse(
+        {"choices": [{"delta": {"reasoning_content": "先看看"}, "finish_reason": None}]},
+        {"choices": [{"delta": {"reasoning_content": "北进口的数据"}, "finish_reason": None}]},
+        {"choices": [{"delta": {"content": "北进口流量正常。"}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    )
+    monkeypatch.setattr("src.agent.llm.requests.post", lambda *a, **kw: _FakeSSEResponse(lines))
+    client = DeepSeekClient(api_key="sk-test")
+    events = list(client.chat_stream([{"role": "user", "content": "hi"}]))
+    reasoning_events = [e for e in events if e["type"] == "reasoning_delta"]
+    assert [e["text"] for e in reasoning_events] == ["先看看", "北进口的数据"]
+    final = events[-1]
+    assert final["type"] == "message"
+    assert final["message"]["reasoning_content"] == "先看看北进口的数据"
+    assert final["message"]["content"] == "北进口流量正常。"
+
+
+def test_chat_stream_omits_reasoning_key_when_absent(monkeypatch):
+    """普通（非思考模式）响应不应带 reasoning_content 键，避免污染历史消息。"""
+    lines = _sse(
+        {"choices": [{"delta": {"content": "你好"}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    )
+    monkeypatch.setattr("src.agent.llm.requests.post", lambda *a, **kw: _FakeSSEResponse(lines))
+    client = DeepSeekClient(api_key="sk-test")
+    events = list(client.chat_stream([{"role": "user", "content": "hi"}]))
+    assert not any(e["type"] == "reasoning_delta" for e in events)
+    assert "reasoning_content" not in events[-1]["message"]
 
 
 # ── 知识库 ────────────────────────────────────────────────────────────────
@@ -189,6 +244,42 @@ def test_analyst_llm_error_becomes_event():
     assert "模拟网络故障" in events[-1]["message"]
 
 
+class ReasoningClient:
+    """模拟思考模式：调用工具前先产出 reasoning_delta，再给出最终答案。"""
+
+    model = "fake-reasoner"
+    available = True
+    thinking_strength = "high"
+
+    def __init__(self):
+        self.calls = 0
+
+    def chat_stream(self, messages, tools=None, temperature=0.6):
+        self.calls += 1
+        if self.calls == 1:
+            yield {"type": "reasoning_delta", "text": "先查一下北进口的流量"}
+            yield {"type": "message", "finish_reason": "tool_calls",
+                   "message": {"role": "assistant", "content": "",
+                               "reasoning_content": "先查一下北进口的流量",
+                               "tool_calls": [{"id": "c1", "type": "function",
+                                               "function": {"name": "get_overview",
+                                                            "arguments": "{}"}}]}}
+        else:
+            yield {"type": "delta", "text": "分析完成。"}
+            yield {"type": "message", "finish_reason": "stop",
+                   "message": {"role": "assistant", "content": "分析完成。"}}
+
+
+def test_analyst_forwards_reasoning_events():
+    analyst = TrafficAnalyst(client=ReasoningClient())
+    events = list(analyst.chat_events("总体情况如何"))
+    assert events[0] == {"type": "reasoning", "text": "先查一下北进口的流量"}
+    assert [e["type"] for e in events[1:]] == \
+        ["tool_call", "tool_result", "text", "context", "done"]
+    # reasoning_content 随工具调用轮次一并保留进历史，供下一轮请求回传
+    assert analyst.history[1]["reasoning_content"] == "先查一下北进口的流量"
+
+
 def test_report_pipeline_saves_file(tmp_path, monkeypatch):
     import src.agent.analyst as analyst_mod
 
@@ -283,3 +374,8 @@ def test_frontend_wiring():
     for cmd in ("help", "clear", "report", "summary", "reload", "tools", "model"):
         assert f"{cmd}:" in js or f"'{cmd}'" in js or f'"{cmd}"' in js
     assert "dispatchSlashCommand" in js and "/help" in js
+
+    # 思维链展示：独立的 reasoning 消息类型 + 样式
+    assert "ev.type==='reasoning'" in js
+    assert "addReasoningShell" in js and "finalizeReasoning" in js
+    assert "reasoningmsg" in css

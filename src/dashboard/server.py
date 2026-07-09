@@ -137,6 +137,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_dashboard_json(path)
         elif path == "/outputs/trajectory.mp4":
             self._serve_video(os.path.join(OUTPUTS_DIR, "trajectory.mp4"))
+        elif path == "/outputs/trajectory_north_full.mp4":
+            self._serve_video(os.path.join(OUTPUTS_DIR, "trajectory_north_full.mp4"))
+        elif path == "/outputs/trajectory_east_full.mp4":
+            self._serve_video(os.path.join(OUTPUTS_DIR, "trajectory_east_full.mp4"))
+        elif path == "/outputs/trajectory_south_full.mp4":
+            self._serve_video(os.path.join(OUTPUTS_DIR, "trajectory_south_full.mp4"))
         elif path == "/outputs/trajectory_map.png":
             self._serve_file(os.path.join(OUTPUTS_DIR, "trajectory_map.png"), "image/png")
         else:

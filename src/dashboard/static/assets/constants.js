@@ -8,6 +8,21 @@ window.CONST = {
   // 视频路径
   VIDEO_URL: '/outputs/trajectory.mp4',
 
+  // 三进口独立视频
+  VIDEO_URLS: {
+    north:  '/outputs/trajectory_north_full.mp4',
+    east:   '/outputs/trajectory_east_full.mp4',
+    south:  '/outputs/trajectory_south_full.mp4',
+    merged: '/outputs/trajectory.mp4',
+  },
+
+  VIDEO_SCOPE_MAP: {
+    '/outputs/trajectory_north_full.mp4': 'north',
+    '/outputs/trajectory_east_full.mp4': 'east',
+    '/outputs/trajectory_south_full.mp4': 'south',
+    '/outputs/trajectory.mp4': 'merged',
+  },
+
   // 默认值
   FALLBACKS: {
     lane: 'UNKNOWN',

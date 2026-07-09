@@ -47,6 +47,9 @@ python3 -u src/utils/visualize_trajectories_video.py  # 视频叠加
 
 # 车道线手动标注（生成 calibrations/ 标定数据）
 python3 src/cross_section/annotate_lane.py
+
+# AI 交通分析智能体（DeepSeek 桌面应用；需 export DEEPSEEK_API_KEY=sk-xxx）
+python3 run_agent.py    # 等价 python3 -m src.main agent；无 pywebview 时自动退化为浏览器模式
 ```
 
 ## 代码架构
@@ -69,6 +72,20 @@ src/
   evaluation/
     eval_on_video.py       # 伪GT精度评测（yolo26x作GT，对比待测模型）
     eval_coco.py           # ultralytics model.val() 在COCO val2017上评测
+  agent/                   # AI 交通分析智能体（DeepSeek 函数调用桌面应用）
+    datastore.py           # TrafficDataStore：读三进口full CSV+dashboard JSON，聚合查询
+                           # 含测速可信度交叉验证（到达/离去对称性）、车流波浪模式识别
+    tools.py               # ~20个 function calling 工具：交通数据类 + 项目自省类
+    project_tools.py       # 只读项目自省工具：读文件/检索/Python模块解析/CSV体检/列输出文件
+                           # （沙箱限定项目目录内，不执行任意命令）
+    knowledge.py           # 交通工程知识库（带出处）+ 关键词检索，抑制幻觉
+    llm.py                 # DeepSeek 客户端（requests 实现 SSE 流式 + tool_calls 增量合并）
+    analyst.py             # 系统提示词（防幻觉铁律）+ 工具循环 + 一键报告流水线
+    server.py              # 零依赖 HTTP 服务（端口8766，SSE 推流）
+    app.py                 # pywebview 桌面窗口入口（缺失时退化浏览器）
+    static/                # 前端：聊天流+工具步骤卡+KPI侧栏+报告抽屉（深蓝科技风）
+                           # 内置内部命令 /help /clear /report /summary /reload /tools /model
+                           # （聊天框输入，客户端直接处理，不占用 LLM 调用）
 ```
 
 所有业务模块均从 `src/config/settings.py` 读取配置，禁止在业务代码中硬编码路径或超参。各模块顶部有 `sys.path.insert` 保证从任意目录直接运行。

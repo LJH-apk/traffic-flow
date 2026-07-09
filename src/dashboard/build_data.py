@@ -14,6 +14,7 @@
     events.json      — 最近过车事件列表
     trajectories.json— 轨迹坐标（抽稀后，Canvas 绘制用）
     validation.json  — 精度校验摘要
+    track_stats.json — 轨迹时长统计（跟踪演示用）
 """
 
 import csv
@@ -26,25 +27,55 @@ ROOT = Path(__file__).parents[2]
 OUTPUTS = ROOT / "outputs"
 DASHBOARD_OUT = OUTPUTS / "dashboard"
 
-# 优先使用合并版数据，不存在则回退到分进口文件
+# 优先使用 run-all 产生的三进口全量文件，其次合并版，最后单进口文件
+# 轨迹：优先用 merged，其次各进口 full，最后单文件
 TRAJECTORY_SOURCES = [
+    OUTPUTS / "trajectory_merged.csv",
+]
+TRAJECTORY_ALL = [
+    OUTPUTS / "trajectory_north_full.csv",
+    OUTPUTS / "trajectory_east_full.csv",
+    OUTPUTS / "trajectory_south_full.csv",
     OUTPUTS / "trajectory_merged.csv",
     OUTPUTS / "trajectory.csv",
 ]
-CROSS_SECTION_SOURCES = [
+VEHICLE_STATS_ALL = [
+    OUTPUTS / "vehicle_stats_north_full.csv",
+    OUTPUTS / "vehicle_stats_east_full.csv",
+    OUTPUTS / "vehicle_stats_south_full.csv",
+    OUTPUTS / "vehicle_stats_lane_fix.csv",
+    OUTPUTS / "vehicle_stats.csv",
+]
+TRAJ_GROUPS_ALL = [
+    OUTPUTS / "trajectory_groups_north_full.csv",
+    OUTPUTS / "trajectory_groups_east_full.csv",
+    OUTPUTS / "trajectory_groups_south_full.csv",
+    OUTPUTS / "trajectory_groups_lane_fix.csv",
+    OUTPUTS / "trajectory_groups.csv",
+]
+# cross_section 直接用各进口全量文件合并（run-all 输出），因为旧的 merged 可能数据不全
+CROSS_SECTION_SOURCES = []
+CROSS_SECTION_FALLBACKS = [
+    OUTPUTS / "cross_section_north_full.csv",
+    OUTPUTS / "cross_section_east_full.csv",
+    OUTPUTS / "cross_section_south_full.csv",
     OUTPUTS / "cross_section_merged_with_lane.csv",
     OUTPUTS / "cross_section_merged.csv",
-]
-CROSS_SECTION_FALLBACKS = [
     OUTPUTS / "cross_section_north.csv",
     OUTPUTS / "cross_section_south.csv",
     OUTPUTS / "cross_section_east.csv",
 ]
 VEHICLE_STATS_SOURCES = [
+    OUTPUTS / "vehicle_stats_north_full.csv",
+    OUTPUTS / "vehicle_stats_east_full.csv",
+    OUTPUTS / "vehicle_stats_south_full.csv",
     OUTPUTS / "vehicle_stats_lane_fix.csv",
     OUTPUTS / "vehicle_stats.csv",
 ]
 TRAJ_GROUPS_SOURCES = [
+    OUTPUTS / "trajectory_groups_north_full.csv",
+    OUTPUTS / "trajectory_groups_east_full.csv",
+    OUTPUTS / "trajectory_groups_south_full.csv",
     OUTPUTS / "trajectory_groups_lane_fix.csv",
     OUTPUTS / "trajectory_groups.csv",
 ]
@@ -52,6 +83,27 @@ VALIDATION_SOURCES = [
     OUTPUTS / "validation_final" / "validation_summary.csv",
     OUTPUTS / "validation_latest" / "validation_summary.csv",
 ]
+
+SCOPE_SOURCE_MAP = {
+    "north": {
+        "trajectory": OUTPUTS / "trajectory_north_full.csv",
+        "cross_section": OUTPUTS / "cross_section_north_full.csv",
+        "vehicle_stats": OUTPUTS / "vehicle_stats_north_full.csv",
+        "trajectory_groups": OUTPUTS / "trajectory_groups_north_full.csv",
+    },
+    "east": {
+        "trajectory": OUTPUTS / "trajectory_east_full.csv",
+        "cross_section": OUTPUTS / "cross_section_east_full.csv",
+        "vehicle_stats": OUTPUTS / "vehicle_stats_east_full.csv",
+        "trajectory_groups": OUTPUTS / "trajectory_groups_east_full.csv",
+    },
+    "south": {
+        "trajectory": OUTPUTS / "trajectory_south_full.csv",
+        "cross_section": OUTPUTS / "cross_section_south_full.csv",
+        "vehicle_stats": OUTPUTS / "vehicle_stats_south_full.csv",
+        "trajectory_groups": OUTPUTS / "trajectory_groups_south_full.csv",
+    },
+}
 
 # ── 车型颜色（与 settings.py 对齐） ──────────────────────────────────
 CLASS_COLORS: dict[str, str] = {
@@ -74,11 +126,70 @@ DIRECTION_COLORS: dict[str, str] = {
 # ── 辅助函数 ──────────────────────────────────────────────────────────
 
 
+def _load_all_from_sources(sources: list[Path], fallbacks: list[Path] | None = None) -> list[dict]:
+    """
+    从多个数据源加载并合并，自动去重 _full.csv 与旧文件的重叠。
+
+    优先级：
+    1. 如果 sources 中有文件存在，直接读取第一个存在的
+    2. 如果 sources 为空或都不存在，检查 fallbacks 是否有 _full.csv
+    3. 如果存在 _full.csv 文件，只用 _full.csv（避免与旧文件重复）
+    4. 否则读取全部 fallbacks
+    """
+    # Step 1: 尝试 sources
+    for src in sources:
+        if src.exists() and src.stat().st_size > 0:
+            return _read_csv(src)
+
+    if not fallbacks:
+        return []
+
+    # Step 2: 检查 fallbacks 中是否有 _full.csv
+    full_files = [fb for fb in fallbacks
+                  if "_full.csv" in fb.name and fb.exists() and fb.stat().st_size > 0]
+    if full_files:
+        rows = []
+        for fb in full_files:
+            rows.extend(_read_csv(fb))
+        return rows
+
+    # Step 3: 逐个读所有 fallbacks
+    rows = []
+    for fb in fallbacks:
+        if fb.exists() and fb.stat().st_size > 0:
+            rows.extend(_read_csv(fb))
+    return rows
+
+
 def _find_first_existing(paths: list[Path]) -> Path | None:
     for p in paths:
         if p.exists() and p.stat().st_size > 0:
             return p
     return None
+
+
+def _load_cross_section_rows() -> list[dict]:
+    """加载断面数据：有 _full.csv 时只用全量文件，避免与旧数据重复。"""
+    # 先检查是否有 run-all 产生的全量文件
+    full_files = [fb for fb in CROSS_SECTION_FALLBACKS
+                  if "_full.csv" in fb.name and fb.exists() and fb.stat().st_size > 0]
+    if full_files:
+        rows = []
+        for fb in full_files:
+            rows.extend(_read_csv(fb))
+        return rows
+
+    # 其次尝试合并版
+    cs_path = _find_first_existing(CROSS_SECTION_SOURCES)
+    if cs_path:
+        return _read_csv(cs_path)
+
+    # 最后逐个读旧文件
+    rows = []
+    for fb in CROSS_SECTION_FALLBACKS:
+        if fb.exists() and fb.stat().st_size > 0:
+            rows.extend(_read_csv(fb))
+    return rows
 
 
 def _read_csv(path: Path) -> list[dict]:
@@ -136,14 +247,7 @@ def build_meta(traj_path: Path) -> dict:
     sections: list[dict] = []
     seen_sections: set[str] = set()
 
-    cs_path = _find_first_existing(CROSS_SECTION_SOURCES)
-    if cs_path:
-        cs_rows = _read_csv(cs_path)
-    else:
-        cs_rows = []
-        for fb in CROSS_SECTION_FALLBACKS:
-            if fb.exists() and fb.stat().st_size > 0:
-                cs_rows.extend(_read_csv(fb))
+    cs_rows = _load_cross_section_rows()
 
     for row in cs_rows:
         name = _safe_str(row.get("section", ""))
@@ -638,6 +742,77 @@ def build_validation() -> dict | None:
     }
 
 
+def build_track_stats(traj_rows: list[dict]) -> dict:
+    """生成 track_stats.json：每 track 时长、均速 + 时长直方图。"""
+    from collections import defaultdict
+
+    track_data: dict[int, dict] = defaultdict(lambda: {
+        "timestamps": [], "speeds": [], "class_name": "",
+    })
+
+    for row in traj_rows:
+        tid = _safe_int(row.get("track_id", 0))
+        ts = _safe_float(row.get("timestamp_s", 0))
+        spd = _safe_float(row.get("speed_kmh", 0))
+        cls = _safe_str(row.get("class_name", ""))
+        if not tid:
+            continue
+        td = track_data[tid]
+        td["timestamps"].append(ts)
+        if spd > 0:
+            td["speeds"].append(spd)
+        if cls and not td["class_name"]:
+            td["class_name"] = cls
+
+    tracks = []
+    for tid, data in track_data.items():
+        if len(data["timestamps"]) < 2:
+            continue
+        start_s = min(data["timestamps"])
+        end_s = max(data["timestamps"])
+        duration = end_s - start_s
+        avg_speed = (sum(data["speeds"]) / len(data["speeds"])
+                     if data["speeds"] else 0.0)
+        tracks.append({
+            "track_id": tid,
+            "class_name": data["class_name"],
+            "start_s": round(start_s, 3),
+            "end_s": round(end_s, 3),
+            "duration_s": round(duration, 1),
+            "avg_speed_kmh": round(avg_speed, 1),
+            "point_count": len(data["timestamps"]),
+        })
+
+    tracks.sort(key=lambda t: -t["duration_s"])
+
+    # 时长分布直方图
+    dur_bins = [0, 10, 30, 60, 120, 180, 300, 9999]
+    dur_labels = ["0-10s", "10-30s", "30-60s", "60-120s", "120-180s", "180-300s", "300s+"]
+    hist = [0] * (len(dur_bins) - 1)
+    for t in tracks:
+        d = t["duration_s"]
+        for i in range(len(dur_bins) - 1):
+            if dur_bins[i] <= d < dur_bins[i + 1]:
+                hist[i] += 1
+                break
+
+    return {
+        "total_tracks": len(tracks),
+        "tracks": tracks[:150],  # Top 150 for UI
+        "duration_histogram": {
+            "bins": dur_labels,
+            "counts": hist,
+        },
+        "stats": {
+            "max_duration_s": tracks[0]["duration_s"] if tracks else 0,
+            "avg_duration_s": round(
+                sum(t["duration_s"] for t in tracks) / len(tracks), 1
+            ) if tracks else 0,
+            "tracks_over_60s": sum(1 for t in tracks if t["duration_s"] >= 60),
+        },
+    }
+
+
 # ── 入口 ───────────────────────────────────────────────────────────────
 
 
@@ -653,30 +828,23 @@ def main():
         print(f"  已搜索: {[str(p) for p in TRAJECTORY_SOURCES]}")
         sys.exit(1)
 
-    cs_path = _find_first_existing(CROSS_SECTION_SOURCES)
-    if cs_path:
-        cs_rows = _read_csv(cs_path)
-        print(f"[OK]  断面数据: {cs_path.name} ({len(cs_rows)} 行)")
-    else:
-        cs_rows = []
-        for fb in CROSS_SECTION_FALLBACKS:
-            if fb.exists() and fb.stat().st_size > 0:
-                rows = _read_csv(fb)
-                cs_rows.extend(rows)
-                print(f"[OK]  断面数据(合并): {fb.name} ({len(rows)} 行)")
-        if not cs_rows:
-            print("[WARN] 未找到任何断面数据，部分 JSON 将为空")
+    cs_rows = _load_cross_section_rows()
+    print(f"[OK]  断面数据: {len(cs_rows)} 行")
 
-    vs_path = _find_first_existing(VEHICLE_STATS_SOURCES)
-    vs_rows = _read_csv(vs_path) if vs_path else []
-    print(f"[OK]  车辆统计: {vs_path.name if vs_path else 'N/A'} ({len(vs_rows)} 行)")
+    vs_rows = _load_all_from_sources([], VEHICLE_STATS_ALL)
+    print(f"[OK]  车辆统计: {len(vs_rows)} 行")
 
-    tg_path = _find_first_existing(TRAJ_GROUPS_SOURCES)
-    tg_rows = _read_csv(tg_path) if tg_path else []
-    print(f"[OK]  轨迹分组: {tg_path.name if tg_path else 'N/A'} ({len(tg_rows)} 行)")
+    tg_rows = _load_all_from_sources([], TRAJ_GROUPS_ALL)
+    print(f"[OK]  轨迹分组: {len(tg_rows)} 行")
 
-    traj_rows = _read_csv(traj_path)
-    print(f"[OK]  轨迹数据: {traj_path.name} ({len(traj_rows)} 行)")
+    # 全量轨迹数据（用于 trajectories/overview）
+    traj_rows = _load_all_from_sources([], TRAJECTORY_ALL)
+    print(f"[OK]  轨迹数据: {len(traj_rows)} 行")
+
+    # 单个轨迹文件路径（用于 meta/timeline 生成，任选一个存在的即可）
+    traj_path = _find_first_existing(TRAJECTORY_ALL)
+    if not traj_path:
+        traj_path = _find_first_existing(TRAJECTORY_SOURCES)
 
     # 2. 创建输出目录
     DASHBOARD_OUT.mkdir(parents=True, exist_ok=True)
@@ -684,39 +852,36 @@ def main():
     # 3. 生成各个 JSON
     from datetime import datetime, timezone, timedelta
 
-    # meta.json
-    print("\n[1/7] 生成 meta.json ...")
-    meta = build_meta(traj_path)
+    print("\n[1/8] 生成 merged 看板数据 ...")
     tz = timezone(timedelta(hours=8))
-    meta["generated_at"] = datetime.now(tz).isoformat()
-    meta["dataset"]["vehicle_stats_rows"] = len(vs_rows)
-    meta["dataset"]["trajectory_group_rows"] = len(tg_rows)
-    _write_json("meta.json", meta)
+    _write_scope_bundle("merged", traj_path, traj_rows, cs_rows, vs_rows, tg_rows)
+    merged_meta_path = DASHBOARD_OUT / "meta.json"
+    if merged_meta_path.exists():
+      with open(merged_meta_path, "r", encoding="utf-8") as f:
+          merged_meta = json.load(f)
+      merged_meta["generated_at"] = datetime.now(tz).isoformat()
+      _write_json("meta.json", merged_meta)
 
-    # timeline.json + events.json
-    print("[2/7] 生成 timeline.json ...")
-    print("[3/7] 生成 events.json ...")
-    timeline, events = build_timeline_and_events(traj_path, cs_rows)
-    _write_json("timeline.json", timeline)
-    _write_json("events.json", {"items": events, "total": len(events)})
-
-    # overview.json
-    print("[4/7] 生成 overview.json ...")
-    overview = build_overview(traj_rows, events, vs_rows, tg_rows)
-    _write_json("overview.json", overview)
-
-    # charts.json
-    print("[5/7] 生成 charts.json ...")
-    charts = build_charts(events, vs_rows, tg_rows)
-    _write_json("charts.json", charts)
-
-    # trajectories.json
-    print("[6/7] 生成 trajectories.json ...")
-    trajectories = build_trajectories(traj_rows, tg_rows)
-    _write_json("trajectories.json", trajectories)
+    print("[2/8] 生成 north/east/south 分进口看板数据 ...")
+    for scope, paths in SCOPE_SOURCE_MAP.items():
+        traj_scope_path = paths["trajectory"]
+        if not traj_scope_path.exists() or traj_scope_path.stat().st_size == 0:
+            print(f"  [SKIP] {scope} 缺少轨迹文件")
+            continue
+        traj_scope_rows = _read_csv(traj_scope_path)
+        cs_scope_rows = _read_csv(paths["cross_section"]) if paths["cross_section"].exists() else []
+        vs_scope_rows = _read_csv(paths["vehicle_stats"]) if paths["vehicle_stats"].exists() else []
+        tg_scope_rows = _read_csv(paths["trajectory_groups"]) if paths["trajectory_groups"].exists() else []
+        _write_scope_bundle(scope, traj_scope_path, traj_scope_rows, cs_scope_rows, vs_scope_rows, tg_scope_rows)
+        meta_scope_path = DASHBOARD_OUT / f"meta_{scope}.json"
+        if meta_scope_path.exists():
+            with open(meta_scope_path, "r", encoding="utf-8") as f:
+                meta_scope = json.load(f)
+            meta_scope["generated_at"] = datetime.now(tz).isoformat()
+            _write_json(f"meta_{scope}.json", meta_scope)
 
     # validation.json
-    print("[7/7] 生成 validation.json ...")
+    print("[3/8] 生成 validation.json ...")
     validation = build_validation()
     if validation:
         _write_json("validation.json", validation)
@@ -739,6 +904,41 @@ def _write_json(filename: str, data: dict | list):
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     size_kb = path.stat().st_size / 1024
     print(f"  -> {filename} ({size_kb:.1f} KB)")
+
+
+def _write_scope_bundle(
+    scope: str,
+    traj_path: Path,
+    traj_rows: list[dict],
+    cs_rows: list[dict],
+    vs_rows: list[dict],
+    tg_rows: list[dict],
+) -> None:
+    """为 north/east/south/merged 生成独立 JSON。"""
+    suffix = "" if scope == "merged" else f"_{scope}"
+
+    meta = build_meta(traj_path)
+    meta["dataset"]["trajectory_rows"] = len(traj_rows)
+    meta["dataset"]["cross_section_rows"] = len(cs_rows)
+    meta["dataset"]["vehicle_stats_rows"] = len(vs_rows)
+    meta["dataset"]["trajectory_group_rows"] = len(tg_rows)
+    _write_json(f"meta{suffix}.json", meta)
+
+    timeline, events = build_timeline_and_events(traj_path, cs_rows)
+    _write_json(f"timeline{suffix}.json", timeline)
+    _write_json(f"events{suffix}.json", {"items": events, "total": len(events)})
+
+    overview = build_overview(traj_rows, events, vs_rows, tg_rows)
+    _write_json(f"overview{suffix}.json", overview)
+
+    charts = build_charts(events, vs_rows, tg_rows)
+    _write_json(f"charts{suffix}.json", charts)
+
+    trajectories = build_trajectories(traj_rows, tg_rows)
+    _write_json(f"trajectories{suffix}.json", trajectories)
+
+    track_stats = build_track_stats(traj_rows)
+    _write_json(f"track_stats{suffix}.json", track_stats)
 
 
 if __name__ == "__main__":

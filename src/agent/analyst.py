@@ -3,6 +3,7 @@
 
 对外统一产出事件流（dict 生成器），由 server.py 转为 SSE 推给前端：
   {"type": "text", "text": str}                     可见文本增量
+  {"type": "reasoning", "text": str}                思维链增量（仅思考模式下出现）
   {"type": "tool_call", "call_id", "name", "label", "arguments"}
   {"type": "tool_result", "call_id", "name", "preview", "elapsed_s"}
   {"type": "report_saved", "path": str}             报告写盘完成
@@ -73,18 +74,27 @@ SYSTEM_PROMPT = """\
 9. 回答项目代码、模块职责、运行命令、路径、配置或已有产物时，必须调用 inspect_project_config、
    search_project_files、read_project_file、summarize_python_module、list_output_files 或 analyze_csv_file
    中的合适工具，避免凭记忆描述当前仓库。
+10. 每次调用工具前，先用一句不超过20字的话说明你要查什么、为什么（如"先查一下北进口的具体流量和速度"），
+    这句话独立成段、单独输出，然后再发起工具调用；工具结果返回后如需继续调用其他工具，
+    同样先说一句再调用；到了给出最终正式回答时，不必再重复这些过程性文字，直接进入结论与分析。
 
 ## 防幻觉铁律
-10. 回答中的一切数字只能来自工具返回结果，一切公式/标准/分级阈值只能来自
+11. 回答中的一切数字只能来自工具返回结果，一切公式/标准/分级阈值只能来自
    query_knowledge 知识库条目——引用时注明来源（如「HCM」「Webster(1958)」）。
-11. 不凭记忆背规范条款号或标准数值；知识库未命中时如实说明「知识库未收录」。
-12. 工具返回 error 或数据不足时，明确告知用户并说明缺什么，禁止推测补数。
-13. 明确区分三类表述：观测事实（工具数据）、推断（注明假设）、建议（注明依据）。
+12. 不凭记忆背规范条款号或标准数值；知识库未命中时如实说明「知识库未收录」。
+13. 工具返回 error 或数据不足时，明确告知用户并说明缺什么，禁止推测补数。
+14. 明确区分三类表述：观测事实（工具数据）、推断（注明假设）、建议（注明依据）。
 
 ## 输出风格
-- 中文回答，结构清晰，酌情使用小标题、列表、表格；面向评委与工程人员。
-- 简洁专业不堆砌套话，数字保留 1 位小数；一次回答聚焦问题本身。
-- 禁止在输出中使用emoji
+- 严禁使用任何 emoji 或示意性符号（包括但不限于 ✅❌⚠️🚗📊👍等）——这是硬性红线，
+  不因语气生动、强调重点或用户情绪而破例，用文字本身表达强调，不用符号代替。
+- 惜字如金：最终正式回答里先给结论，再给支撑它的必要数据，不重复。禁止复述用户的问题，
+  禁止把表格里的数字在正文里再念一遍；工作准则第10条要求的调用工具前一句话说明是唯一例外，
+  仅限一句话，不要展开成一段过程解说，最终回答里不再重复这句话。
+- 篇幅服从问题：能一句话说清的不写三句，简单问题给简短直接的回答；
+  只有用户明确要综合分析、对比多个进口或要报告时才展开分点、表格。
+- 不堆砌套话与虚词（"值得注意的是""综上所述""可以看出""不难发现"等一律不用），
+  数字保留 1 位小数，不为凑字数而重复表达同一个意思。
 """
 
 REPORT_INSTRUCTION = """\
@@ -128,7 +138,9 @@ Markdown 格式，正文约 2500–3500 字，章节固定如下：
 逐项列出异常类型、成因、清洗规则（直接引用摘要中的数据质量诊断），说明其对统计结果的影响。
 
 要求：所有数字必须来自数据摘要，带单位；公式、分级阈值只引用文末「工程参考知识」并注明来源；
-表格用 Markdown 语法；不要输出与报告无关的内容。
+表格用 Markdown 语法；不要输出与报告无关的内容；全文严禁使用任何 emoji 或示意性符号。
+篇幅是给内容留的上限不是目标，各章节只写新信息，不要把前面章节的数字或结论换个说法再复述一遍，
+不为凑够字数堆砌套话。
 
 数据摘要（JSON）：
 """
@@ -166,6 +178,8 @@ class TrafficAnalyst:
                 for ev in self.client.chat_stream(messages, tools=TOOL_DEFINITIONS):
                     if ev["type"] == "delta":
                         yield {"type": "text", "text": ev["text"]}
+                    elif ev["type"] == "reasoning_delta":
+                        yield {"type": "reasoning", "text": ev["text"]}
                     else:
                         final = ev
             except LLMError as exc:
@@ -240,6 +254,8 @@ class TrafficAnalyst:
                 if ev["type"] == "delta":
                     parts.append(ev["text"])
                     yield {"type": "text", "text": ev["text"]}
+                elif ev["type"] == "reasoning_delta":
+                    yield {"type": "reasoning", "text": ev["text"]}
         except LLMError as exc:
             yield {"type": "error", "message": str(exc)}
             return

@@ -17,15 +17,19 @@ window.API = (() => {
     return data;
   }
 
-  function _endpoint(name) { return BASE + '/' + name; }
+  function _endpoint(name, scope) {
+    const scopedName = scope && scope !== 'merged' ? `${name}_${scope}` : name;
+    return BASE + '/' + scopedName;
+  }
 
-  async function loadMeta()        { return _fetchJSON(_endpoint('meta')); }
-  async function loadTimeline()    { return _fetchJSON(_endpoint('timeline')); }
-  async function loadEvents()      { return _fetchJSON(_endpoint('events')); }
-  async function loadOverview()    { return _fetchJSON(_endpoint('overview')); }
-  async function loadCharts()      { return _fetchJSON(_endpoint('charts')); }
-  async function loadTrajectories(){ return _fetchJSON(_endpoint('trajectories')); }
+  async function loadMeta(scope)        { return _fetchJSON(_endpoint('meta', scope)); }
+  async function loadTimeline(scope)    { return _fetchJSON(_endpoint('timeline', scope)); }
+  async function loadEvents(scope)      { return _fetchJSON(_endpoint('events', scope)); }
+  async function loadOverview(scope)    { return _fetchJSON(_endpoint('overview', scope)); }
+  async function loadCharts(scope)      { return _fetchJSON(_endpoint('charts', scope)); }
+  async function loadTrajectories(scope){ return _fetchJSON(_endpoint('trajectories', scope)); }
   async function loadValidation()  { return _fetchJSON(_endpoint('validation')); }
+  async function loadTrackStats(scope) { return _fetchJSON(_endpoint('track_stats', scope)); }
 
   /** 并行加载演示模式所需的全部数据 */
   async function loadDemoData() {
@@ -47,7 +51,7 @@ window.API = (() => {
 
   return {
     loadMeta, loadTimeline, loadEvents, loadOverview, loadCharts,
-    loadTrajectories, loadValidation,
+    loadTrajectories, loadValidation, loadTrackStats,
     loadDemoData, loadDashboardData,
     clearCache,
   };

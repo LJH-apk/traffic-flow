@@ -136,21 +136,23 @@ function md(src){
     const L=lines[i];
     if(/^\s*$/.test(L)){i++;continue}
     if(/^@@CODEBLOCK_\d+@@$/.test(L.trim())){out+=L.trim();i++;continue}
-    if(/^### /.test(L)){out+='<h3>'+inline(L.slice(4))+'</h3>';i++;continue}
-    if(/^## /.test(L)){out+='<h2>'+inline(L.slice(3))+'</h2>';i++;continue}
-    if(/^# /.test(L)){out+='<h1>'+inline(L.slice(2))+'</h1>';i++;continue}
+    const heading=L.match(/^(#{1,6})\s+(.*)$/);
+    if(heading){
+      const level=heading[1].length;
+      out+=`<h${level}>${inline(heading[2])}</h${level}>`;i++;continue;
+    }
     if(/^> /.test(L)){out+='<blockquote>'+inline(L.slice(2))+'</blockquote>';i++;continue}
     if(/^---+\s*$/.test(L)){out+='<hr>';i++;continue}
     if(/^\|/.test(L)){
       const rows=[];while(i<lines.length&&/^\|/.test(lines[i])){rows.push(lines[i]);i++}
       const cells=r=>r.replace(/^\||\|$/g,'').split('|').map(c=>inline(c.trim()));
-      let t='<table>';
+      let t='<div class="table-wrap"><table>';
       rows.forEach((r,ri)=>{
         if(/---/.test(r)&&/^[\s|:-]+$/.test(r))return;
         const tag=ri===0?'th':'td';
         t+='<tr>'+cells(r).map(c=>`<${tag}>${c}</${tag}>`).join('')+'</tr>';
       });
-      out+=t+'</table>';continue}
+      out+=t+'</table></div>';continue}
     if(/^[-•] /.test(L)){
       let l='<ul>';while(i<lines.length&&/^[-•] /.test(lines[i])){l+='<li>'+inline(lines[i].slice(2))+'</li>';i++}
       out+=l+'</ul>';continue}
@@ -171,6 +173,11 @@ const $=id=>document.getElementById(id);
 const thread=$('thread'),scrollBox=$('scroll'),input=$('input');
 let busy=false;
 let CONTEXT_STATUS=null;
+let SUMMARY=null;
+const ARCH_KEY='agent_sessions_v1';
+let ARCHIVES=[];
+try{ARCHIVES=JSON.parse(localStorage.getItem(ARCH_KEY)||'[]')||[]}catch(e){ARCHIVES=[]}
+let viewingArchive=null;
 
 function scrollBottom(){scrollBox.scrollTop=scrollBox.scrollHeight}
 function now(){return new Date().toTimeString().slice(0,8)}
@@ -180,7 +187,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function setBusy(b){
   busy=b;
   $('btnSend').disabled=b;$('btnReport').disabled=b;$('btnReset').disabled=b;
-  document.querySelectorAll('.qchip').forEach(c=>c.disabled=b);
+  document.querySelectorAll('.sug,.fn,.chat-item').forEach(c=>c.disabled=b);
   ['modelSelect','thinkingSelect'].forEach(id=>{const el=$(id);if(el)el.disabled=b});
   document.querySelectorAll('.setting-pill').forEach(btn=>btn.disabled=b);
   if(b)closeSettingMenus();
@@ -219,14 +226,16 @@ async function ssePost(url,body,onEvent){
 /* ── 消息 DOM 构建 ──────────────────────────────────────── */
 function hideHero(){const h=$('hero');if(h)h.style.display='none'}
 
+const AI_MARK_SVG='<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.6c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z" fill="#2b2620"/><path d="M12.6 9.6c.25 1.45.8 2 2.25 2.25-1.45.25-2 .8-2.25 2.25-.25-1.45-.8-2-2.25-2.25 1.45-.25 2-.8 2.25-2.25z" fill="#e0a63e"/></svg>';
+const USER_MARK_SVG='<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="5" r="2.6" stroke="currentColor" stroke-width="1.3"/><path d="M2.4 13.2a5.3 5.3 0 0 1 10.2 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
 function addUser(text){
   const div=document.createElement('div');div.className='msg user';
-  div.innerHTML=`<div class="avatar">我</div><div class="bubble">${esc(text)}<div class="meta" style="text-align:right">${now()}</div></div>`;
+  div.innerHTML=`<div class="avatar">${USER_MARK_SVG}</div><div><div class="bubble">${esc(text)}</div><div class="meta">${now()}</div></div>`;
   thread.appendChild(div);scrollBottom();
 }
 function addAgentShell(){
   const div=document.createElement('div');div.className='msg agent';
-  div.innerHTML=`<div class="avatar">AI</div><div class="bubble"><div class="stream"></div><span class="cursor"></span><div class="meta">${MODEL} · ${now()}</div></div>`;
+  div.innerHTML=`<div class="avatar">${AI_MARK_SVG}</div><div class="bubble"><div class="stream"></div><span class="cursor"></span><div class="meta">${MODEL} · ${now()}</div></div>`;
   thread.appendChild(div);scrollBottom();
   return div;
 }
@@ -234,6 +243,12 @@ function addError(message){
   const div=document.createElement('div');div.className='msg errormsg';
   div.innerHTML=`<div class="avatar">!</div><div class="bubble">${esc(message)}<div class="meta">${now()}</div></div>`;
   thread.appendChild(div);scrollBottom();
+}
+function addReasoningShell(){
+  const div=document.createElement('div');div.className='msg reasoningmsg';
+  div.innerHTML=`<div class="avatar">…</div><div class="bubble"><div class="stream"></div><span class="cursor"></span></div>`;
+  thread.appendChild(div);scrollBottom();
+  return div;
 }
 function addStepsBox(){
   const box=document.createElement('div');box.className='steps';
@@ -277,6 +292,8 @@ function clearThinking(){if(thinkingEl){thinkingEl.remove();thinkingEl=null}}
 /* ── 对话流状态机 ───────────────────────────────────────── */
 function makeChatRenderer(){
   let bubble=null,streamText='',stepsBox=null;
+  let reasoningBubble=null,reasoningText='';
+  let usedOverview=false,lastBubble=null;
   const stepMap=new Map();  // call_id -> {el, t0}
 
   function finalizeBubble(){
@@ -284,16 +301,28 @@ function makeChatRenderer(){
     const cur=bubble.querySelector('.cursor');if(cur)cur.remove();
     bubble=null;streamText='';
   }
+  function finalizeReasoning(){
+    if(!reasoningBubble)return;
+    const cur=reasoningBubble.querySelector('.cursor');if(cur)cur.remove();
+    reasoningBubble=null;reasoningText='';
+  }
   return {
     onEvent(ev){
-      if(ev.type==='text'){
+      if(ev.type==='reasoning'){
         clearThinking();
-        if(!bubble){bubble=addAgentShell();streamText='';stepsBox=null}
+        if(!reasoningBubble){reasoningBubble=addReasoningShell();reasoningText=''}
+        reasoningText+=ev.text;
+        reasoningBubble.querySelector('.stream').innerHTML=md(reasoningText);
+        scrollBottom();
+      }else if(ev.type==='text'){
+        clearThinking();finalizeReasoning();
+        if(!bubble){bubble=addAgentShell();lastBubble=bubble;streamText='';stepsBox=null}
         streamText+=ev.text;
         bubble.querySelector('.stream').innerHTML=md(streamText);
         scrollBottom();
       }else if(ev.type==='tool_call'){
-        clearThinking();finalizeBubble();
+        clearThinking();finalizeBubble();finalizeReasoning();
+        if(ev.name==='get_overview')usedOverview=true;
         if(!stepsBox)stepsBox=addStepsBox();
         const el=addStep(stepsBox,ev.label||ev.name);
         stepMap.set(ev.call_id,{el,t0:performance.now()});
@@ -307,20 +336,25 @@ function makeChatRenderer(){
       }else if(ev.type==='context'){
         updateContextMeter(ev.context);
       }else if(ev.type==='error'){
-        clearThinking();finalizeBubble();addError(ev.message);
+        clearThinking();finalizeBubble();finalizeReasoning();addError(ev.message);
       }else if(ev.type==='done'){
-        clearThinking();finalizeBubble();
+        clearThinking();finalizeBubble();finalizeReasoning();
+        if(usedOverview&&lastBubble)appendEmbedCards(lastBubble.querySelector('.bubble'));
       }
     },
-    finish(){clearThinking();finalizeBubble()},
+    finish(){clearThinking();finalizeBubble();finalizeReasoning()},
   };
 }
 
 async function send(text){
   const t=(text||input.value).trim();
   if(!t||busy)return;
+  if(viewingArchive){   // 回看历史时发起提问：自动退出回看并开启新会话
+    exitArchiveView();clearThread();renderArchList();
+    try{await fetch('/api/agent/reset',{method:'POST'})}catch(e){/* ignore */}
+  }
   hideCommandPalette();
-  input.value='';input.style.height='62px';
+  input.value='';input.style.height='44px';
   if(t.startsWith('/')){
     hideHero();addUser(t);
     await dispatchSlashCommand(t);
@@ -357,17 +391,72 @@ input.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}
 });
 input.addEventListener('input',()=>{
-  input.style.height='62px';input.style.height=Math.min(150,input.scrollHeight)+'px';
+  input.style.height='44px';input.style.height=Math.min(150,input.scrollHeight)+'px';
   updateCommandPalette();
 });
 input.addEventListener('focus',updateCommandPalette);
 input.addEventListener('blur',()=>setTimeout(hideCommandPalette,120));
 
-/* ── 新会话 ─────────────────────────────────────────────── */
-async function runClear(){
-  try{await fetch('/api/agent/reset',{method:'POST'})}catch(e){/* ignore */}
+/* ── 新会话 + 会话历史（localStorage 存档回看）──────────── */
+function threadMessagesHtml(){
+  return [...thread.children].filter(el=>el.id!=='hero').map(el=>el.outerHTML).join('');
+}
+function saveArchives(){
+  try{localStorage.setItem(ARCH_KEY,JSON.stringify(ARCHIVES))}catch(e){/* 存储满则放弃 */}
+}
+function archiveCurrent(){
+  if(!thread.querySelector('.msg'))return;
+  const firstUser=thread.querySelector('.msg.user .bubble');
+  const title=((firstUser?firstUser.textContent:'')||'未命名会话').trim().slice(0,16)||'未命名会话';
+  ARCHIVES.unshift({id:Date.now(),title,time:new Date().toTimeString().slice(0,5),
+    html:threadMessagesHtml()});
+  ARCHIVES=ARCHIVES.slice(0,8);
+  saveArchives();
+}
+function clearThread(){
   thread.querySelectorAll('.msg,.steps,.thinking').forEach(el=>el.remove());
+}
+function exitArchiveView(){
+  viewingArchive=null;
+  $('archiveNote').hidden=true;
+  input.disabled=false;
+}
+function renderArchList(){
+  const box=$('archList');
+  if(!box)return;
+  if(!ARCHIVES.length){box.innerHTML='<div class="recent-empty">暂无历史会话</div>';return}
+  const icon='<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 3.2A1.2 1.2 0 0 1 3.2 2h7.6A1.2 1.2 0 0 1 12 3.2v5.6A1.2 1.2 0 0 1 10.8 10H5l-3 2.6V3.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+  box.innerHTML=ARCHIVES.map(a=>
+    `<button class="chat-item${a.id===viewingArchive?' active':''}" data-arch="${a.id}">${icon}
+      <span><span class="t">${esc(a.title)}</span><span class="m">${esc(a.time)}</span></span></button>`
+  ).join('');
+  box.querySelectorAll('.chat-item').forEach(btn=>{
+    btn.addEventListener('click',()=>viewArchive(Number(btn.dataset.arch)));
+  });
+}
+function viewArchive(id){
+  if(busy)return;
+  const item=ARCHIVES.find(a=>a.id===id);
+  if(!item)return;
+  if(!viewingArchive)archiveCurrent();   // 先把当前会话存档，避免丢失
+  viewingArchive=id;
+  hideHero();clearThread();
+  thread.insertAdjacentHTML('beforeend',item.html);
+  thread.querySelectorAll('.step').forEach(el=>{
+    el.addEventListener('click',()=>el.classList.toggle('open'));
+  });
+  $('archiveNote').hidden=false;
+  input.disabled=true;
+  renderArchList();
+  scrollBox.scrollTop=0;
+}
+async function runClear(){
+  if(!viewingArchive)archiveCurrent();
+  exitArchiveView();
+  try{await fetch('/api/agent/reset',{method:'POST'})}catch(e){/* ignore */}
+  clearThread();
   const h=$('hero');if(h)h.style.display='';
+  renderArchList();
 }
 $('btnReset').addEventListener('click',()=>{if(!busy)runClear()});
 
@@ -392,7 +481,10 @@ async function runReportGeneration(){
   let text='';
   try{
     await ssePost('/api/agent/report',{},ev=>{
-      if(ev.type==='text'){
+      if(ev.type==='reasoning'){
+        status.textContent='模型思考中 …';
+      }else if(ev.type==='text'){
+        status.textContent='正在生成报告 …';
         text+=ev.text;
         holder.innerHTML=md(text);
         body.scrollTop=body.scrollHeight;
@@ -592,20 +684,31 @@ async function dispatchSlashCommand(raw){
   }
 }
 
-/* ── 侧栏 KPI 渲染 ──────────────────────────────────────── */
-const CLASS_COLORS={'小汽车':'#34d399','摩托/电动车':'#c084fc','货车':'#60a5fa',
-                    '公交/大客车':'#f59e0b','自行车':'#22d3ee'};
-const ENTRANCE_COLORS={'南进口':'#22d3ee','北进口':'#6366f1','东进口':'#60a5fa'};
+/* ── 右栏工作区渲染 ─────────────────────────────────────── */
+const CLASS_COLORS={'小汽车':'#4e7fc2','摩托/电动车':'#e0a63e','货车':'#4b9e5f',
+                    '公交/大客车':'#8a68c9','自行车':'#a59c8d'};
+const ENTRANCE_COLORS={'南进口':'#4e7fc2','北进口':'#e0a63e','东进口':'#4b9e5f'};
 
-function kpiCell(value,name,unit,alt,dec){
-  return `<div class="kpi${alt?' alt':''}"><div class="kpi-num" data-count="${value}" data-dec="${dec||0}">0${unit?`<small>${unit}</small>`:''}</div><div class="kpi-name">${name}</div></div>`;
+function kpiCell(value,name,unit,dec){
+  return `<div class="mk"><div class="v" data-count="${value}" data-dec="${dec||0}">0${unit?`<small>${unit}</small>`:''}</div><div class="n">${name}</div></div>`;
 }
 function barRows(counts,colors){
   const entries=Object.entries(counts);
-  if(!entries.length)return '<div class="quality-note">暂无数据</div>';
+  if(!entries.length)return '<div class="ws-note">暂无数据</div>';
   const max=Math.max(...entries.map(([,v])=>v));
   return entries.map(([k,v])=>
-    `<div class="bar-row"><span>${esc(k)}</span><div class="bar-track"><div class="bar-fill" data-w="${Math.max(1,Math.round(v/max*100))}" style="background:${colors[k]||'#8aa4ba'}"></div></div><span class="bar-val">${v}</span></div>`
+    `<div class="mbar"><div class="ml"><span>${esc(k)}</span><b>${v}</b></div><div class="track"><div class="fill" data-w="${Math.max(1,Math.round(v/max*100))}" style="background:${colors[k]||'#a59c8d'}"></div></div></div>`
+  ).join('');
+}
+function fileCardsHtml(s){
+  const files=[
+    {name:'cross_section_full.csv',meta:`过线事件 · ${s.total_events??'—'} 行`,color:'#4b9e5f',kind:'CSV'},
+    {name:'trajectory.csv',meta:`轨迹采样 · ${s.unique_tracks??'—'} 条`,color:'#4e7fc2',kind:'CSV'},
+    {name:'dashboard_data.json',meta:'看板聚合 · 三进口',color:'#d95f3b',kind:'JSON'},
+  ];
+  return files.map(f=>
+    `<div class="file-card"><div class="fic" style="background:${f.color}">${f.kind}</div>
+      <div><div class="fname">${f.name}</div><div class="fmeta">${f.meta}</div></div></div>`
   ).join('');
 }
 function countUp(el){
@@ -620,28 +723,93 @@ function countUp(el){
   requestAnimationFrame(tick);
 }
 function renderSummary(s){
+  SUMMARY=s;
   if(!s||!s.data_ready){
-    $('kpiGrid').innerHTML='<div class="quality-note">暂无检测数据</div>';
-    $('classBars').innerHTML='<div class="quality-note">请先运行检测生成 outputs/ 数据</div>';
-    $('entranceBars').innerHTML='';
+    $('kpiGrid').innerHTML='<div class="ws-note">暂无检测数据</div>';
+    $('classBars').innerHTML='<div class="ws-note">请先运行检测生成 outputs/ 数据</div>';
+    $('entranceBars').innerHTML='<div class="ws-note">暂无数据</div>';
+    $('fileCards').innerHTML='<div class="ws-note">未找到 outputs/ 数据文件</div>';
     $('qcNote').textContent='—';
     return;
   }
   $('kpiGrid').innerHTML=[
-    kpiCell(s.unique_tracks||0,'轨迹总数','',false,0),
-    kpiCell(s.total_events||0,'过线事件','',false,0),
-    kpiCell(s.hourly_flow||0,'折算小时流量','辆/h',true,0),
-    kpiCell(s.avg_speed_kmh||0,'平均断面速度','km/h',true,1),
-    kpiCell(s.p85_speed_kmh||0,'85 分位速度','km/h',true,1),
-    kpiCell((s.peak_minute&&s.peak_minute.count)||0,'高峰分钟流量','辆/min',true,0),
+    kpiCell(s.total_events||0,'过线事件','',0),
+    kpiCell(s.unique_tracks||0,'轨迹总数','',0),
+    kpiCell(s.hourly_flow||0,'折算流量','辆/h',0),
+    kpiCell(s.avg_speed_kmh||0,'平均速度','km/h',1),
+    kpiCell(s.p85_speed_kmh||0,'85 分位速度','km/h',1),
+    kpiCell((s.peak_minute&&s.peak_minute.count)||0,'高峰分钟','辆/min',0),
   ].join('');
   $('classBars').innerHTML=barRows(s.class_counts||{},CLASS_COLORS);
   $('entranceBars').innerHTML=barRows(s.entrance_counts||{},ENTRANCE_COLORS);
+  $('fileCards').innerHTML=fileCardsHtml(s);
   const qc=s.qc||{};
   $('qcNote').innerHTML=`已自动清洗：<em>${qc.speed_outliers||0}</em> 条超速离群（标定畸变）· `
     +`零速事件 <em>${qc.zero_speed||0}</em> 条单列 · 对向/未识别车道不计入车道统计`;
   document.querySelectorAll('[data-count]').forEach(countUp);
-  setTimeout(()=>{document.querySelectorAll('.bar-fill').forEach(b=>{b.style.width=b.dataset.w+'%'})},200);
+  setTimeout(()=>{document.querySelectorAll('.ws .fill').forEach(b=>{b.style.width=b.dataset.w+'%'})},200);
+}
+
+/* ── 回复内嵌指标卡与图表（get_overview 触发）───────────── */
+function donutChartHtml(counts,colors){
+  const entries=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  const total=entries.reduce((acc,[,v])=>acc+v,0);
+  if(!total)return '';
+  const C=2*Math.PI*30;   // r=30
+  let offset=0;
+  const segs=[],legend=[];
+  entries.forEach(([k,v])=>{
+    const frac=v/total,len=frac*C;
+    const color=colors[k]||'#a59c8d';
+    segs.push(`<circle cx="38" cy="38" r="30" fill="none" stroke="${color}" stroke-width="11" stroke-dasharray="${len.toFixed(1)} ${(C-len).toFixed(1)}" stroke-dashoffset="${(-offset).toFixed(1)}"/>`);
+    legend.push(`<div class="lg"><span class="sw" style="background:${color}"></span>${esc(k)}<span class="pv">${(frac*100).toFixed(1)}%</span></div>`);
+    offset+=len;
+  });
+  return `<div class="donut-wrap">
+    <svg width="76" height="76" viewBox="0 0 76 76" style="flex-shrink:0">
+      <g transform="rotate(-90 38 38)">${segs.join('')}</g>
+      <text x="38" y="36" text-anchor="middle" font-size="12" font-weight="800" fill="#2b2620" font-family="JetBrains Mono,monospace">${total}</text>
+      <text x="38" y="47" text-anchor="middle" font-size="7.5" fill="#a59c8d">过线事件</text>
+    </svg>
+    <div class="legend">${legend.join('')}</div>
+  </div>`;
+}
+function embedCardsHtml(s){
+  const peak=(s.peak_minute&&s.peak_minute.count)||0;
+  return `<div class="embed">
+  <div class="embed-title">核心指标与构成（自动生成）</div>
+  <div class="kpi-row">
+    <div class="kcard"><div class="kic" style="background:rgba(78,127,194,.12)">
+      <svg width="17" height="17" viewBox="0 0 17 17" fill="none"><path d="M2 13.6a6.8 6.8 0 0 1 13 0" stroke="#4e7fc2" stroke-width="1.5" stroke-linecap="round"/><path d="M8.5 13.6l3-4.8" stroke="#4e7fc2" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <div><div class="kv">${s.avg_speed_kmh??'—'}<small>km/h</small></div><div class="kn">平均速度</div></div></div>
+    <div class="kcard"><div class="kic" style="background:rgba(224,166,62,.14)">
+      <svg width="17" height="17" viewBox="0 0 17 17" fill="none"><path d="M3 14V9M8.5 14V3.6M14 14V6.8" stroke="#e0a63e" stroke-width="1.7" stroke-linecap="round"/></svg></div>
+      <div><div class="kv">${s.p85_speed_kmh??'—'}<small>km/h</small></div><div class="kn">85 分位速度</div></div></div>
+    <div class="kcard"><div class="kic" style="background:rgba(75,158,95,.12)">
+      <svg width="17" height="17" viewBox="0 0 17 17" fill="none"><path d="M2.4 10.5 4 6.4a1.4 1.4 0 0 1 1.3-.9h6.4a1.4 1.4 0 0 1 1.3.9l1.6 4.1M2.4 10.5h12.2v2.8a.7.7 0 0 1-.7.7h-1a.7.7 0 0 1-.7-.7v-.7H4.8v.7a.7.7 0 0 1-.7.7h-1a.7.7 0 0 1-.7-.7v-2.8z" stroke="#4b9e5f" stroke-width="1.3" stroke-linejoin="round"/></svg></div>
+      <div><div class="kv">${s.hourly_flow??'—'}<small>辆/h</small></div><div class="kn">折算小时流量</div></div></div>
+    <div class="kcard"><div class="kic" style="background:rgba(217,95,59,.12)">
+      <svg width="17" height="17" viewBox="0 0 17 17" fill="none"><path d="M8.5 2.2 15.6 14.2H1.4L8.5 2.2z" stroke="#d95f3b" stroke-width="1.4" stroke-linejoin="round"/><path d="M8.5 7v3.2" stroke="#d95f3b" stroke-width="1.4" stroke-linecap="round"/><circle cx="8.5" cy="12.2" r=".8" fill="#d95f3b"/></svg></div>
+      <div><div class="kv">${peak}<small>辆/min</small></div><div class="kn">高峰分钟流量</div></div></div>
+  </div>
+  <div class="chart-row">
+    <div class="ccard"><div class="ct">车型构成 <span>${s.total_events??''}</span></div>
+      ${donutChartHtml(s.class_counts||{},CLASS_COLORS)}</div>
+    <div class="ccard"><div class="ct">进口分布 <span>次</span></div>
+      ${barRows(s.entrance_counts||{},ENTRANCE_COLORS)}</div>
+  </div>
+  </div>`;
+}
+function appendEmbedCards(bubbleEl){
+  const s=SUMMARY;
+  if(!s||!s.data_ready||!bubbleEl)return;
+  if(bubbleEl.querySelector('.embed'))return;
+  const box=document.createElement('div');
+  box.innerHTML=embedCardsHtml(s);
+  const meta=bubbleEl.querySelector('.meta');
+  bubbleEl.insertBefore(box,meta||null);
+  setTimeout(()=>{box.querySelectorAll('.fill').forEach(b=>{b.style.width=b.dataset.w+'%'})},120);
+  scrollBottom();
 }
 
 /* ── 初始化 ─────────────────────────────────────────────── */
@@ -825,10 +993,62 @@ async function init(){
     $('heroText').textContent='未找到检测数据：请先运行三进口检测（python3 -m src.main run-all）生成 outputs/ 数据后重启';
   }
 
-  $('quickChips').innerHTML=(questions||[]).map(q=>`<button class="qchip">${esc(q)}</button>`).join('');
-  document.querySelectorAll('.qchip').forEach(c=>c.addEventListener('click',()=>send(c.textContent)));
+  $('quickChips').innerHTML=(questions||[]).map(q=>`<button class="sug">${esc(q)}</button>`).join('');
+  document.querySelectorAll('#quickChips .sug').forEach(c=>c.addEventListener('click',()=>send(c.textContent)));
+  document.querySelectorAll('.fn[data-q]').forEach(btn=>btn.addEventListener('click',()=>{
+    if(!busy)send(btn.dataset.q);
+  }));
+  $('btnSlash').addEventListener('click',()=>{
+    if(busy)return;
+    if(viewingArchive)return;
+    input.value='/';input.focus();updateCommandPalette();
+  });
+  renderArchList();
 
   if(health.report_exists){$('btnDownload').disabled=false}
 }
 
+/* ── 工作区分组折叠（状态记忆到 localStorage）───────────── */
+const WS_KEY='agent_ws_collapsed_v1';
+const WS_PANEL_KEY='agent_ws_panel_collapsed_v1';
+function initWorkspacePanel(){
+  const app=document.querySelector('.app');
+  const btn=$('wsToggle');
+  if(!app||!btn)return;
+
+  const apply=collapsed=>{
+    app.classList.toggle('ws-collapsed',collapsed);
+    btn.setAttribute('aria-expanded',String(!collapsed));
+    btn.title=collapsed?'展开工作区':'收起工作区';
+  };
+
+  let collapsed=false;
+  try{collapsed=localStorage.getItem(WS_PANEL_KEY)==='1'}catch(e){collapsed=false}
+  apply(collapsed);
+
+  btn.addEventListener('click',()=>{
+    collapsed=!app.classList.contains('ws-collapsed');
+    apply(collapsed);
+    try{localStorage.setItem(WS_PANEL_KEY,collapsed?'1':'0')}catch(e){/* ignore */}
+  });
+}
+
+function initWsSections(){
+  let collapsed={};
+  try{collapsed=JSON.parse(localStorage.getItem(WS_KEY)||'{}')||{}}catch(e){collapsed={}}
+  document.querySelectorAll('.ws-sec').forEach(sec=>{
+    const key=sec.dataset.sec||'';
+    if(collapsed[key])sec.classList.add('collapsed');
+    const label=sec.querySelector('.ws-label');
+    if(!label)return;
+    label.addEventListener('click',()=>{
+      sec.classList.toggle('collapsed');
+      collapsed[key]=sec.classList.contains('collapsed');
+      try{localStorage.setItem(WS_KEY,JSON.stringify(collapsed))}catch(e){/* ignore */}
+    });
+  });
+}
+
+initWorkspacePanel();
+initWsSections();
 init();

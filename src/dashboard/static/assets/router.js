@@ -23,8 +23,8 @@ window.Router = (() => {
     if (currentView === name && name !== '') return;
     const handler = routes[name];
     if (!handler) {
-      // fallback to demo
-      if (routes['demo']) { _activate('demo'); return; }
+      // fallback to detection_demo
+      if (routes['detection_demo']) { _activate('detection_demo'); return; }
       console.warn('Unknown route:', name);
       return;
     }
@@ -46,7 +46,7 @@ window.Router = (() => {
   }
 
   function onHashChange() {
-    const hash = window.location.hash.replace('#', '') || 'demo';
+    const hash = window.location.hash.replace('#', '') || 'detection_demo';
     _activate(hash);
   }
 

@@ -18,6 +18,7 @@ def main() -> None:
             "run-all",
             "build-dashboard",
             "dashboard",
+            "agent",
             "eval-video",
             "eval-coco",
         ],
@@ -36,6 +37,7 @@ def _choose_command() -> str:
         ("run-all", "三进口批量跟踪"),
         ("build-dashboard", "构建仪表盘数据"),
         ("dashboard", "启动仪表盘"),
+        ("agent", "AI 分析智能体"),
         ("eval-video", "伪 GT 评测"),
         ("eval-coco", "COCO 评测"),
     ]
@@ -80,6 +82,12 @@ def _run_command(command: str) -> None:
         from src.dashboard.server import run
 
         run()
+        return
+
+    if command == "agent":
+        from src.agent.app import main as agent_main
+
+        agent_main()
         return
 
     if command == "eval-video":

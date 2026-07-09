@@ -126,11 +126,17 @@ class DeepSeekClient:
         """
         SSE 流式生成器，依次产出：
           {"type": "delta", "text": str}            —— 可见文本增量
+          {"type": "reasoning_delta", "text": str}  —— 思维链增量（仅思考模式下出现）
           {"type": "message", "message": {...},     —— 结束时的完整 assistant 消息
            "finish_reason": "stop" | "tool_calls"}
+
+        message 里的 reasoning_content：思考模式下，凡本轮出现工具调用，
+        必须原样保留在历史消息中一并回传给下一轮请求（DeepSeek 思考模式的要求），
+        因此只在非空时才写入 message，避免普通问答也带上这个键。
         """
         resp = self._request(self._payload(messages, tools, temperature, True), stream=True)
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
         finish_reason = None
         try:
@@ -154,6 +160,10 @@ class DeepSeekClient:
                 if text:
                     content_parts.append(text)
                     yield {"type": "delta", "text": text}
+                reasoning_text = delta.get("reasoning_content")
+                if reasoning_text:
+                    reasoning_parts.append(reasoning_text)
+                    yield {"type": "reasoning_delta", "text": reasoning_text}
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
                     slot = tool_calls.setdefault(idx, {
@@ -170,6 +180,8 @@ class DeepSeekClient:
             resp.close()
 
         message: dict = {"role": "assistant", "content": "".join(content_parts)}
+        if reasoning_parts:
+            message["reasoning_content"] = "".join(reasoning_parts)
         if tool_calls:
             message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
             finish_reason = finish_reason or "tool_calls"

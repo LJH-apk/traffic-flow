@@ -3,133 +3,177 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>交通流 AI 分析决策系统</title>
+<title>交通流数据分析智能体</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 <link rel="stylesheet" href="/assets/agent.css">
 </head>
 <body>
 
-<header class="topbar">
-  <div class="brand">
-    <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
-      <path d="M15 3v24" stroke="rgba(96,165,250,.55)" stroke-width="4" stroke-linecap="round"/>
-      <path d="M15 15h12" stroke="rgba(96,165,250,.55)" stroke-width="4" stroke-linecap="round"/>
-      <path d="M15 6v18M18 15h8" stroke="#22d3ee" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="2.5 3.2"/>
-      <circle cx="15" cy="15" r="3.4" fill="#22d3ee"/>
-      <circle cx="15" cy="15" r="6.5" stroke="rgba(34,211,238,.4)" stroke-width="1"/>
-    </svg>
-    <div>
-      <div class="brand-title">交通流 AI 分析决策系统</div>
-      <div class="brand-sub">TRAFFIC ANALYST AGENT</div>
+<div class="app">
+
+<!-- ══ 左栏：会话与功能导航 ══ -->
+<aside class="nav">
+  <div class="nav-brand">
+    <div class="mark">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M9 2v14" stroke="#f5f2ea" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M9 9h7" stroke="#f5f2ea" stroke-width="2.6" stroke-linecap="round"/>
+        <circle cx="9" cy="9" r="2.1" fill="#e0a63e"/>
+      </svg>
     </div>
+    <b>交通流数据分析智能体</b>
   </div>
-  <div class="top-right">
-    <button class="dbtn" id="btnReset" title="清空会话历史">新会话</button>
-    <div class="chip"><span class="dot" id="modelDot"></span><span id="modelName">…</span></div>
-    <div class="chip" id="dataChip">数据检查中…</div>
-    <div class="clock" id="clock">--:--:--</div>
-  </div>
-</header>
 
-<div class="banner" id="banner" hidden></div>
+  <button class="new-chat" id="btnReset" title="清空会话历史，开始新会话">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5v11M1.5 7h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    新建会话
+  </button>
 
-<div class="layout">
-  <!-- ══ 左侧：KPI 数据概览 ══ -->
-  <aside class="sidebar">
-    <div class="card">
-      <div class="card-label">观测时段 <b>SESSION</b></div>
-      <div class="session-line" id="sessionLine">
-        早高峰 <strong>07:59 – 08:15</strong>（15 min）<br>
-        丁字路口 · 三进口 4K 监控 · 10 车道
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">核心指标 <b>KPI</b></div>
-      <div class="kpi-grid" id="kpiGrid"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">车型构成 <b>CLASS</b></div>
-      <div id="classBars"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">进口分布 <b>ENTRANCE</b></div>
-      <div id="entranceBars"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">数据质量 <b>QC</b></div>
-      <div class="quality-note" id="qcNote">加载中…</div>
-    </div>
-
-    <button class="btn-report" id="btnReport">
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M3 1.5h6.5L12.5 4.5v9a1 1 0 0 1-1 1h-8.5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z" stroke="#bff3fc" stroke-width="1.2"/><path d="M5 8h5M5 10.5h3.5" stroke="#bff3fc" stroke-width="1.2" stroke-linecap="round"/></svg>
-      生成完整分析报告
+  <div class="fn-list" id="fnList">
+    <button class="fn" data-q="评价该路口当前的总体运行状况">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.8V8l2.2 1.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      运行诊断
     </button>
-  </aside>
+    <button class="fn" data-q="信号配时有什么优化空间？">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="5" y="1.6" width="6" height="12.8" rx="3" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="5" r="1.15" fill="#d95f3b"/><circle cx="8" cy="8" r="1.15" fill="#e0a63e"/><circle cx="8" cy="11" r="1.15" fill="#4b9e5f"/></svg>
+      信号配时
+    </button>
+    <button class="fn" data-q="数据中有哪些异常，是如何清洗的？">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.5 3h11M4.5 8h7M6.5 13h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      数据质量
+    </button>
+    <button class="fn" data-q="南进口的测速数据可信吗？">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 13a6.3 6.3 0 0 1 12 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 13 10.8 8.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="13" r="1.2" fill="currentColor"/></svg>
+      测速核验
+    </button>
+    <button class="fn" id="btnReport">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3.5 1.8h6.2l3 3v9.4a.9.9 0 0 1-.9.9H3.5a.9.9 0 0 1-.9-.9V2.7a.9.9 0 0 1 .9-.9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.4 8.6h5.2M5.4 11.2h3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      报告生成
+    </button>
+  </div>
 
-  <!-- ══ 中间：对话区 ══ -->
-  <main class="chat">
-    <div class="chat-scroll" id="scroll">
-      <div class="chat-inner" id="thread">
-        <div class="hero" id="hero">
-          <svg class="hero-mark" viewBox="0 0 74 74" fill="none">
-            <path d="M37 8v58" stroke="rgba(96,165,250,.5)" stroke-width="9" stroke-linecap="round"/>
-            <path d="M37 37h29" stroke="rgba(96,165,250,.5)" stroke-width="9" stroke-linecap="round"/>
-            <path d="M37 14v46M44 37h20" stroke="#22d3ee" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 5"/>
-            <circle cx="37" cy="37" r="7" fill="#22d3ee"/>
-            <circle cx="37" cy="37" r="14" stroke="rgba(34,211,238,.45)" stroke-width="1.2"/>
-            <circle cx="37" cy="37" r="21" stroke="rgba(34,211,238,.18)" stroke-width="1"/>
+  <div class="nav-label">最近会话</div>
+  <div class="recent" id="archList"></div>
+
+  <div class="nav-foot">
+    <div class="ava">交</div>
+    <span class="who">交通运行中心</span>
+    <span class="badge">本地版</span>
+  </div>
+</aside>
+
+<!-- ══ 中栏：对话 ══ -->
+<main class="panel">
+  <header class="chat-top">
+    <span class="chat-title" id="chatTitle">交通运行分析</span>
+    <span class="chat-sub">早高峰 07:59–08:15 · 丁字路口三进口 · 10 车道</span>
+    <div class="top-acts">
+      <span class="chip"><span class="dot" id="modelDot"></span><span id="modelName">…</span></span>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+  <div class="archive-note" id="archiveNote" hidden>正在回看历史会话 —— 点击「新建会话」继续提问</div>
+
+  <div class="chat-scroll" id="scroll">
+    <div class="chat-inner" id="thread">
+      <div class="hero" id="hero">
+        <div class="hero-mark">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+            <path d="M13 3v20" stroke="#f5f2ea" stroke-width="3.4" stroke-linecap="round"/>
+            <path d="M13 13h10" stroke="#f5f2ea" stroke-width="3.4" stroke-linecap="round"/>
+            <circle cx="13" cy="13" r="3" fill="#e0a63e"/>
           </svg>
-          <h1>让路口数据直接给出工程判断</h1>
-          <p id="heroText">正在连接数据服务…</p>
         </div>
+        <h1>交通分析智能体</h1>
+        <p id="heroText">正在连接数据服务…</p>
+        <div class="sugg" id="quickChips"></div>
       </div>
     </div>
+  </div>
 
-    <div class="composer">
-      <div class="composer-inner">
-        <div class="quick-chips" id="quickChips"></div>
-        <div class="composer-shell">
-          <div class="input-box">
-            <textarea id="input" rows="1" placeholder="输入交通运行、信号配时或数据质量问题"></textarea>
-          </div>
-          <div class="composer-tools">
-            <div class="tool-right">
-              <div class="context-wrap">
-                <button class="context-meter" id="contextMeter" type="button" aria-label="上下文窗口用量">
-                  <span id="contextMeterText">0%</span>
-                </button>
-                <div class="context-popover" id="contextPopover">
-                  <div class="context-pop-title">上下文窗口</div>
-                  <div class="context-pop-line"><span>已用</span><b id="contextUsed">0</b></div>
-                  <div class="context-pop-line"><span>上限</span><b id="contextLimit">64k</b></div>
-                  <div class="context-pop-line"><span>占比</span><b id="contextRatio">0%</b></div>
-                  <div class="context-pop-bar"><span id="contextBar"></span></div>
-                </div>
-              </div>
-              <div class="setting-menu" data-setting="combined">
-                <select id="modelSelect" class="setting-native" aria-hidden="true" tabindex="-1"></select>
-                <select id="thinkingSelect" class="setting-native" aria-hidden="true" tabindex="-1"></select>
-                <button class="setting-pill" id="settingsPill" type="button" title="切换模型和思考强度">
-                  <span class="setting-bolt">⌁</span>
-                  <span class="setting-value" id="settingsPillValue">…</span>
-                  <span class="setting-caret">⌄</span>
-                </button>
-                <div class="setting-popover" id="settingsMenu" role="menu" aria-label="模型和思考强度"></div>
-              </div>
-              <button class="btn-send" id="btnSend" title="发送">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 15V3M4.5 7.5L9 3l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </button>
-            </div>
+  <div class="composer">
+    <div class="compose-box">
+      <div class="input-box">
+        <textarea id="input" rows="1" placeholder="向智能体提问，或输入 /report /help"></textarea>
+      </div>
+      <div class="compose-bar">
+        <button class="cbtn" title="输入命令" id="btnSlash"><svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M9.8 2 5.2 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        <div class="context-wrap">
+          <button class="context-meter" id="contextMeter" type="button" aria-label="上下文窗口用量">
+            <span id="contextMeterText">0%</span>
+          </button>
+          <div class="context-popover" id="contextPopover">
+            <div class="context-pop-title">上下文窗口</div>
+            <div class="context-pop-line"><span>已用</span><b id="contextUsed">0</b></div>
+            <div class="context-pop-line"><span>上限</span><b id="contextLimit">64k</b></div>
+            <div class="context-pop-line"><span>占比</span><b id="contextRatio">0%</b></div>
+            <div class="context-pop-bar"><span id="contextBar"></span></div>
           </div>
         </div>
-        <div class="hint"><span>Enter 发送 · Shift+Enter 换行</span><span id="hintRight">DeepSeek 函数调用 · 多类分析工具 · 领域知识库</span></div>
+        <div class="setting-menu" data-setting="combined">
+          <select id="modelSelect" class="setting-native" aria-hidden="true" tabindex="-1"></select>
+          <select id="thinkingSelect" class="setting-native" aria-hidden="true" tabindex="-1"></select>
+          <button class="setting-pill" id="settingsPill" type="button" title="切换模型和思考强度">
+            <span class="setting-bolt">⌁</span>
+            <span class="setting-value" id="settingsPillValue">…</span>
+            <span class="setting-caret">⌄</span>
+          </button>
+          <div class="setting-popover" id="settingsMenu" role="menu" aria-label="模型和思考强度"></div>
+        </div>
+        <button class="btn-send" id="btnSend" title="发送">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M1.8 8 14.2 2 11.2 14.2 7.9 9.1 1.8 8z" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
+        </button>
       </div>
     </div>
-  </main>
+    <div class="hint"><span>Enter 发送 · Shift+Enter 换行</span><span id="hintRight">DeepSeek 函数调用 · 多类分析工具 · 领域知识库</span></div>
+  </div>
+</main>
+
+<!-- ══ 右栏：工作区 ══ -->
+<aside class="ws">
+  <div class="ws-head">
+    <button class="ws-toggle" id="wsToggle" type="button" aria-expanded="true" title="收起工作区">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M4.6 3 1.8 7.5 4.6 12M10.4 3l2.8 4.5-2.8 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <span class="ws-title">工作区</span>
+  </div>
+
+  <section class="ws-sec" data-sec="kpi">
+    <button class="ws-label" type="button">核心指标 <span class="ws-label-sub">早高峰 15 min</span>
+      <svg class="ws-caret" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="ws-body"><div class="mini-kpi" id="kpiGrid"></div></div>
+  </section>
+
+  <section class="ws-sec" data-sec="class">
+    <button class="ws-label" type="button">车型构成
+      <svg class="ws-caret" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="ws-body"><div class="ws-card" id="classBars"></div></div>
+  </section>
+
+  <section class="ws-sec" data-sec="entrance">
+    <button class="ws-label" type="button">进口分布
+      <svg class="ws-caret" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="ws-body"><div class="ws-card" id="entranceBars"></div></div>
+  </section>
+
+  <section class="ws-sec" data-sec="files">
+    <button class="ws-label" type="button">数据与文件
+      <svg class="ws-caret" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="ws-body" id="fileCards"><div class="ws-note">数据检查中…</div></div>
+  </section>
+
+  <section class="ws-sec" data-sec="qc">
+    <button class="ws-label" type="button">数据质量
+      <svg class="ws-caret" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="ws-body"><div class="ws-card"><div class="ws-note" id="qcNote">加载中…</div></div></div>
+  </section>
+
+  <div class="ws-foot">
+    <div class="model-line"><span id="dataChip">数据检查中…</span> · <span id="clock">--:--:--</span></div>
+  </div>
+</aside>
+
 </div>
 
 <!-- ══ 报告抽屉 ══ -->

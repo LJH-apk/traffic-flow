@@ -154,7 +154,7 @@ AGENT_HOST            = "127.0.0.1"
 AGENT_PORT            = 8766          # 与仪表盘 8765 错开
 AGENT_MAX_TOOL_ROUNDS = 8             # 单条消息最多工具调用轮数（防止死循环）
 AGENT_LLM_TIMEOUT_S   = 120           # LLM 请求超时（秒）
-AGENT_CONTEXT_WINDOW_TOKENS = int(os.environ.get("AGENT_CONTEXT_WINDOW_TOKENS", "64000"))
+AGENT_CONTEXT_WINDOW_TOKENS = int(os.environ.get("AGENT_CONTEXT_WINDOW_TOKENS", "128000"))
 AGENT_REPORT_PATH     = OUTPUT_DIR / "ai_analysis_report.md"
 
 # 车型中文名（智能体输出与前端展示用）

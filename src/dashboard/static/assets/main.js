@@ -3,7 +3,11 @@
    ═══════════════════════════════════════════════════════════════════ */
 (function () {
 
-  // ── 注册路由 ──
+  // ── 注册路由：答辩演示页(1-4) + 原有页面(5-7) ──
+  Router.register('detection_demo', DetectionDemoView);
+  Router.register('tracking_demo', TrackingDemoView);
+  Router.register('traffic_stats', TrafficStatsView);
+  Router.register('visualization', VisualizationView);
   Router.register('demo', DemoView);
   Router.register('live', LiveView);
   Router.register('dashboard', DashboardView);
@@ -18,20 +22,22 @@
 
   // ── 键盘快捷键 ──
   document.addEventListener('keydown', function (e) {
-    // 数字键 1 → 演示模式，2 → 实时检测，3 → 数据看板
-    if (e.key === '1' && !e.ctrlKey && !e.metaKey && document.activeElement === document.body) {
-      Router.navigate('demo');
-    } else if (e.key === '2' && !e.ctrlKey && !e.metaKey && document.activeElement === document.body) {
-      Router.navigate('live');
-    } else if (e.key === '3' && !e.ctrlKey && !e.metaKey && document.activeElement === document.body) {
-      Router.navigate('dashboard');
-    }
+    if (e.ctrlKey || e.metaKey || document.activeElement !== document.body) return;
+    var map = {
+      '1': 'detection_demo',
+      '2': 'tracking_demo',
+      '3': 'traffic_stats',
+      '4': 'visualization',
+      '5': 'demo',
+      '6': 'live',
+      '7': 'dashboard',
+    };
+    if (map[e.key]) Router.navigate(map[e.key]);
   });
 
   // ── 全局错误监听 ──
   window.addEventListener('error', function (e) {
     console.error('Global error:', e.error || e.message);
-    // 出错时不打断用户，仅在控制台记录
   });
 
   window.addEventListener('unhandledrejection', function (e) {

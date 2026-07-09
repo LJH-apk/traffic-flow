@@ -20,8 +20,13 @@
       <span class="topbar-status">LIVE</span>
     </div>
     <nav class="topbar-nav" id="topbarNav">
-      <button class="nav-btn active" data-route="demo">演示模式</button>
-      <button class="nav-btn" data-route="live">实时检测</button>
+      <button class="nav-btn active" data-route="detection_demo">实时检测</button>
+      <button class="nav-btn" data-route="tracking_demo">多目标跟踪</button>
+      <button class="nav-btn" data-route="traffic_stats">交通流统计</button>
+      <button class="nav-btn" data-route="visualization">可视化界面</button>
+      <span class="nav-sep"></span>
+      <button class="nav-btn" data-route="demo">演示模式</button>
+      <button class="nav-btn" data-route="live">实时监控</button>
       <button class="nav-btn" data-route="dashboard">数据看板</button>
     </nav>
     <div class="topbar-info" id="topbarInfo">
@@ -44,6 +49,10 @@
 <script src="/dashboard/assets/components/charts.js"></script>
 <script src="/dashboard/assets/components/event_list.js"></script>
 <script src="/dashboard/assets/components/trajectory_canvas.js"></script>
+<script src="/dashboard/assets/views/detection_demo.js"></script>
+<script src="/dashboard/assets/views/tracking_demo.js"></script>
+<script src="/dashboard/assets/views/traffic_stats.js"></script>
+<script src="/dashboard/assets/views/visualization.js"></script>
 <script src="/dashboard/assets/views/demo.js"></script>
 <script src="/dashboard/assets/views/live.js"></script>
 <script src="/dashboard/assets/views/dashboard.js"></script>

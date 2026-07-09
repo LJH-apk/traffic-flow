@@ -8,6 +8,16 @@
 # 生成输出（运行时产物）
 outputs/
 runs/
+output/
+logs/
+tmp/
+
+# 运行状态 / 日志 / 临时文件
+*.log
+*.pid
+*.lock
+texput.log
+~$*
 
 # 根目录遗留的评测图表 / JSON
 *.png
@@ -49,6 +59,15 @@ debug_diag/
 
 # 压缩备份
 *.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# 打包产物
+build/
+dist/
+code/build/
+code/dist/
 
 # 字体
 *.ttf
