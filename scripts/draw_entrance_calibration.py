@@ -79,6 +79,17 @@ def interpolate_polyline(left, right, ratio=0.5):
     ]
 
 
+def fill_lane(image, left, right, color, alpha=0.32):
+    """把相邻两条边界折线围成的车道面填充为半透明色。"""
+    n = min(len(left), len(right))
+    if n < 2:
+        return
+    poly = np.asarray(left[:n] + right[:n][::-1], dtype=np.int32)
+    overlay = image.copy()
+    cv2.fillPoly(overlay, [poly], color, cv2.LINE_AA)
+    cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
+
+
 def draw_arrow(image, start, end, scale):
     cv2.arrowedLine(image, tuple(map(int, start)), tuple(map(int, end)),
                     WHITE, max(2, round(5 * scale)), cv2.LINE_AA, tipLength=0.35)
@@ -156,16 +167,22 @@ def add_legend(image, scale, title):
     return cv2.cvtColor(np.asarray(canvas), cv2.COLOR_RGBA2BGR)
 
 
-def draw_calibration(calib_dir: Path) -> np.ndarray:
-    ref = cv2.imread(str(calib_dir / "ref.jpg"), cv2.IMREAD_COLOR)
+def draw_calibration(calib_dir: Path, bg_path: Path | None = None) -> np.ndarray:
+    src = bg_path if bg_path is not None else calib_dir / "ref.jpg"
+    ref = cv2.imread(str(src), cv2.IMREAD_COLOR)
     if ref is None:
-        raise FileNotFoundError(f"无法读取参考帧：{calib_dir / 'ref.jpg'}")
+        raise FileNotFoundError(f"无法读取参考帧：{src}")
     result = ref.copy()
     scale = result.shape[1] / 2000.0  # 以 2000px 宽为基准
 
     lanes_data = _load_json(calib_dir / "lanes.json")["lanes"]
     # 按车道 id 升序，得到有序边界折线
     boundaries = [_pts(lanes_data[k]) for k in sorted(lanes_data, key=int)]
+
+    # 先铺半透明车道面（蓝 / 青交替，区分相邻车道），再压边界与中心线
+    LANE_FILLS = [(255, 170, 40), (230, 200, 60)]  # BGR: 蓝、青
+    for i, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
+        fill_lane(result, left, right, LANE_FILLS[i % len(LANE_FILLS)])
 
     for line in boundaries:
         draw_polyline(result, line, BLUE, max(2, round(4 * scale)))
@@ -223,12 +240,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("calib_dir", type=Path, help="进口标定目录（含 ref.jpg 与各 json）")
     parser.add_argument("-o", "--output", type=Path, default=None,
                         help="输出 PNG 路径，默认 outputs/{进口}_calibration.png")
+    parser.add_argument("--bg", type=Path, default=None,
+                        help="自定义背景图（如彩色帧），默认用标定目录的 ref.jpg")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    result = draw_calibration(args.calib_dir)
+    result = draw_calibration(args.calib_dir, bg_path=args.bg)
     output = args.output or Path("outputs") / f"{args.calib_dir.name}_calibration.png"
     output.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(output), result):
